@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Simbotics REBUILT</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+  </script>
+</head>
+<body>
+  <canvas id="view"></canvas>
+
+  <!-- Scoreboard -->
+  <div id="scorebar">
+    <div class="side red"><span class="lbl">紅</span><span id="score-red">0</span></div>
+    <div class="mid"><div id="clock">0:20</div><div id="phase">準備</div></div>
+    <div class="side blue"><span id="score-blue">0</span><span class="lbl">藍</span></div>
+  </div>
+  <div id="hubs">
+    <div id="hub-red" class="hub red"><b>紅 HUB</b> <span id="hub-red-txt">啟用</span></div>
+    <div id="hub-blue" class="hub blue"><b>藍 HUB</b> <span id="hub-blue-txt">啟用</span></div>
+  </div>
+
+  <!-- Player robot -->
+  <div id="robot-card">
+    <div id="robot-name">—</div>
+    <div class="fuel"><span id="fuel-count">0</span><span id="fuel-cap">/ 40</span><span class="unit">FUEL</span></div>
+    <div class="bar"><div id="fuel-bar"></div></div>
+    <div class="chips"><span id="intake-state" class="chip">Intake</span><span id="aim-state" class="chip">Aim</span></div>
+    <div class="stats">得分 <b id="stat-scored">0</b> · 命中率 <b id="stat-acc">—</b></div>
+  </div>
+  <div id="prompt" hidden></div>
+  <div id="toasts"></div>
+  <div id="corner"><button id="btn-help" title="操作說明 (H)">?</button><span id="fps"></span></div>
+
+  <div id="help" hidden>
+    <h3>操作說明</h3>
+    <table>
+      <tr><td>WASD / left stick</td><td>移動（相對於鏡頭方向）</td></tr>
+      <tr><td>J L / ← → / right stick</td><td>旋轉車身</td></tr>
+      <tr><td>Space / click / RT</td><td>射擊（砲塔自動瞄準）</td></tr>
+      <tr><td>Shift / K / LT</td><td>Intake（關閉自動吸球時）</td></tr>
+      <tr><td>I / X button</td><td>切換自動吸球</td></tr>
+      <tr><td>C / A</td><td>在己方 TOWER 往上爬一層</td></tr>
+      <tr><td>X / B</td><td>往下爬</td></tr>
+      <tr><td>V / Y</td><td>切換鏡頭</td></tr>
+      <tr><td>R</td><td>重新開始</td></tr>
+      <tr><td>Esc / P / Start</td><td>暫停</td></tr>
+    </table>
+    <p>開著 Intake 把車頭對準己方 OUTPOST 出球口，Human Player 會把 FUEL 滾給你。</p>
+  </div>
+
+  <!-- Main menu -->
+  <div id="menu" class="overlay">
+    <div class="panel">
+      <div class="brand"><span class="season">2026 賽季</span><h1>REBUILT</h1><span class="sub">Simbotics · FRC 操駕模擬器</span></div>
+      <div class="grid">
+        <label>模式
+          <select id="opt-mode">
+            <option value="match">3v3 比賽（電腦隊友/對手）</option>
+            <option value="solo">單人比賽（計時，無其他機器人）</option>
+            <option value="practice">自由練習（不計時）</option>
+          </select>
+        </label>
+        <label>聯盟
+          <select id="opt-alliance"><option value="blue">藍</option><option value="red">紅</option></select>
+        </label>
+        <label>機器人
+          <select id="opt-preset"></select>
+        </label>
+        <label>隊號
+          <input id="opt-team" type="number" min="1" max="99999">
+        </label>
+        <label class="bot-opt">隊友 AI
+          <select id="opt-ally-skill"></select>
+        </label>
+        <label class="bot-opt">對手 AI
+          <select id="opt-opp-skill"></select>
+        </label>
+        <label class="bot-opt">隊友戰術
+          <select id="opt-ally-tactic"></select>
+        </label>
+        <label class="bot-opt">對手戰術
+          <select id="opt-opp-tactic"></select>
+        </label>
+        <label>鏡頭
+          <select id="opt-camera"><option value="driver">Driver Station</option><option value="chase">跟車</option><option value="broadcast">轉播</option></select>
+        </label>
+      </div>
+      <p id="preset-desc" class="desc"></p>
+      <div class="checks">
+        <label><input id="opt-intake" type="checkbox"> 自動吸球</label>
+        <label><input id="opt-shadows" type="checkbox"> 陰影</label>
+        <label class="bot-opt"><input id="opt-roles" type="checkbox"> 顯示電腦角色</label>
+      </div>
+      <button id="btn-start" class="primary">開始</button>
+      <details class="rules">
+        <summary>本模擬器的規則</summary>
+        <ul>
+          <li>比賽：0:20 AUTO，接著 2:20 TELEOP — Transition（10 秒）、四個 25 秒 Shift、Endgame（30 秒）。</li>
+          <li>每顆 FUEL 進入啟用中的己方 HUB = 1 分。Shift 期間兩邊 HUB 輪流啟用，AUTO 得分較多的聯盟先停用。HUB 停用後 3 秒內進球仍計分。</li>
+          <li>只能在己方 Alliance Zone 內瞄準 HUB；在其他區域射擊會自動把 FUEL 傳回己方區域。</li>
+          <li>TOWER：AUTO 結束時 L1 = 15 分。比賽結束時 L1 10、L2 20、L3 30 分。</li>
+          <li>機器人可以開過 BUMP；只有夠矮的機器人能鑽過 TRENCH。</li>
+        </ul>
+      </details>
+    </div>
+  </div>
+
+  <div id="pause" class="overlay" hidden>
+    <div class="panel small">
+      <h2>暫停</h2>
+      <button id="btn-resume" class="primary">繼續</button>
+      <button id="btn-restart">重新開始</button>
+      <button id="btn-menu">主選單</button>
+    </div>
+  </div>
+
+  <div id="results" class="overlay" hidden>
+    <div class="panel">
+      <div id="results-body"></div>
+      <button id="btn-again" class="primary">再來一場</button>
+      <button id="btn-results-menu">主選單</button>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

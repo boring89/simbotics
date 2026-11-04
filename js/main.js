@@ -1,0 +1,499 @@
+import * as THREE from 'three';
+import {
+  HL, ZONE_X, DEPOT, STAGE, ROBOT_PRESETS, BOT_SKILL, COLORS, side, other,
+} from './config.js';
+import { buildField } from './field.js';
+import { Fuel } from './fuel.js';
+import { Robot } from './robot.js';
+import { Match } from './match.js';
+import { Bot, TeamBrain, TACTICS, ROLE_LABEL } from './ai.js';
+import { Input } from './input.js';
+
+const $ = (id) => document.getElementById(id);
+const STEP = 1 / 120;
+
+// ---------- Settings ----------
+const DEFAULTS = { mode: 'match', alliance: 'blue', preset: 'balanced', allySkill: 'hard', oppSkill: 'einstein', allyTactic: 'balanced', oppTactic: 'random', camera: 'driver', autoIntake: true, team: 9999, shadows: true, showRoles: true };
+let settings = { ...DEFAULTS };
+try { Object.assign(settings, JSON.parse(localStorage.getItem('simbotics.settings') || '{}')); } catch { /* storage unavailable */ }
+const saveSettings = () => { try { localStorage.setItem('simbotics.settings', JSON.stringify(settings)); } catch { /* ignore */ } };
+
+// ---------- Renderer / scene ----------
+const canvas = $('view');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = settings.shadows;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0e1116);
+scene.fog = new THREE.Fog(0x0e1116, 28, 60);
+const camera = new THREE.PerspectiveCamera(60, 1, 0.05, 120);
+
+scene.add(new THREE.HemisphereLight(0xdfe8ff, 0x30333a, 0.9));
+const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+sun.position.set(4, 14, 6);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -10, right: 10, top: 6, bottom: -6, near: 1, far: 40 });
+sun.shadow.bias = -0.0005;
+scene.add(sun);
+for (const x of [-6, 0, 6]) {
+  const p = new THREE.PointLight(0xffffff, 18, 18, 1.6);
+  p.position.set(x, 7, 0);
+  scene.add(p);
+}
+
+const field = buildField(scene);
+const input = new Input();
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+
+// ---------- World ----------
+let world = null;
+let paused = false;
+let camMode = settings.camera;
+const camState = { yaw: 0, pos: new THREE.Vector3(), look: new THREE.Vector3(), init: false };
+
+function randomTeam(used) {
+  let n;
+  do { n = 100 + Math.floor(Math.random() * 9800); } while (used.has(n));
+  used.add(n);
+  return n;
+}
+
+function newWorld() {
+  if (world) {
+    scene.remove(world.fuel.mesh);
+    world.fuel.mesh.geometry.dispose();
+    for (const r of world.robots) { scene.remove(r.mesh); if (r.tag) scene.remove(r.tag); }
+  }
+  const mode = settings.mode;
+  const match = new Match(mode === 'practice' ? 'practice' : 'match');
+  const robots = [];
+  const used = new Set([+settings.team]);
+  const me = settings.alliance;
+  const myPreset = ROBOT_PRESETS[settings.preset];
+  const player = new Robot(0, me, myPreset.team ?? settings.team, myPreset, true);
+  used.add(player.number);
+  robots.push(player);
+  if (mode === 'match') {
+    // Bots drive the real 2026 robots (shuffled), topped up with generic ones.
+    const real = Object.keys(ROBOT_PRESETS).filter((k) => ROBOT_PRESETS[k].real && k !== settings.preset);
+    for (let i = real.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [real[i], real[j]] = [real[j], real[i]]; }
+    const kinds = [...real, 'balanced', 'shuttle', 'hopper'];
+    for (let i = 0; i < 5; i++) {
+      const pr = ROBOT_PRESETS[kinds[i]];
+      const num = pr.team && !used.has(pr.team) ? pr.team : randomTeam(used);
+      used.add(num);
+      robots.push(new Robot(robots.length, i < 2 ? me : other(me), num, pr, false));
+    }
+  }
+
+  const neutral = STAGE.neutralCols * STAGE.neutralRows;
+  const total = neutral + STAGE.depot * 2 + STAGE.outpost * 2 + STAGE.preload * robots.length + 40;
+  const fuel = new Fuel(scene, total);
+  const sp = 0.152;
+  for (let i = 0; i < STAGE.neutralCols; i++) {
+    for (let j = 0; j < STAGE.neutralRows; j++) {
+      fuel.spawn((i - (STAGE.neutralCols - 1) / 2) * sp, 0.075, (j - (STAGE.neutralRows - 1) / 2) * sp);
+    }
+  }
+  for (const a of ['red', 'blue']) {
+    const s = side(a);
+    for (let k = 0; k < STAGE.depot; k++) {
+      const cx = DEPOT.x0 + 0.08 + (k % 4) * 0.155, cz = DEPOT.z0 + 0.1 + Math.floor(k / 4) * 0.155;
+      fuel.spawn(s * cx, 0.075, s * cz);
+    }
+    field.outposts[a].stock = STAGE.outpost;
+    field.outposts[a].feedT = 0;
+  }
+  // The extra pool slots stay inactive: they back preloads and OUTPOST stock.
+
+  // Starting line positions, facing the neutral zone.
+  const starts = [-1.65, 1.65, -3.37];
+  for (const a of ['red', 'blue']) {
+    const s = side(a);
+    robots.filter((r) => r.alliance === a).forEach((r, k) => {
+      r.place(s * (ZONE_X + 0.5), s * starts[k], s > 0 ? Math.PI : 0);
+      r.fuel = STAGE.preload;
+      scene.add(r.mesh);
+    });
+  }
+
+  world = { match, robots, fuel, field, towers: field.towers, bots: [], player, lastSeg: null, toastQ: [], brains: {} };
+  // One strategy brain per alliance; teammates and opponents can use different levels and tactics.
+  const keys = Object.keys(TACTICS);
+  for (const a of ['red', 'blue']) {
+    const mine = a === me;
+    const skill = BOT_SKILL[mine ? settings.allySkill : settings.oppSkill] || BOT_SKILL.hard;
+    let tactic = mine ? settings.allyTactic : settings.oppTactic;
+    if (!TACTICS[tactic]) tactic = keys[Math.floor(Math.random() * keys.length)];
+    world.brains[a] = new TeamBrain(world, a, tactic, skill);
+  }
+  const slots = { red: 0, blue: 0 };
+  for (const r of robots) {
+    if (r.isPlayer) { slots[r.alliance]++; continue; }
+    const brain = world.brains[r.alliance];
+    world.bots.push(new Bot(r, world, brain.skill, slots[r.alliance]++ % 3, brain));
+  }
+  if (mode === 'match') {
+    const t = world.brains[other(me)];
+    setTimeout(() => toast(`對手：${t.skill.name} · ${TACTICS[t.tactic]}`, other(me)), 400);
+  }
+  camState.init = false;
+  paused = false;
+  $('results').hidden = true;
+  $('pause').hidden = true;
+  updateHudStatic();
+  if (mode === 'practice') toast('自由練習 — HUB 永遠啟用', 'neutral');
+}
+
+// ---------- Simulation step ----------
+function feedOutposts(dt) {
+  for (const a of ['red', 'blue']) {
+    const o = field.outposts[a];
+    if (world.match.mode === 'practice' && o.stock < 5) o.stock = 24;
+    o.stockG.children.forEach((b, i) => { b.visible = i < o.stock; });
+    o.feedT -= dt;
+    if (o.stock <= 0 || o.feedT > 0 || !world.match.enabled) continue;
+    for (const r of world.robots) {
+      if (r.alliance !== a || !r.intakeOn || r.fuel >= r.p.capacity) continue;
+      const [lx, lz] = r.toLocal(o.mouth.x, o.mouth.z);
+      if (lx > 0.2 && lx < 1.3 && Math.abs(lz) < 0.45) {
+        const sp = 1.6 + Math.random() * 0.3;
+        if (world.fuel.spawn(o.mouth.x, o.mouth.y, o.mouth.z + (Math.random() - 0.5) * 0.1, o.dir.x * sp, 0, (Math.random() - 0.5) * 0.3) >= 0) {
+          o.stock--;
+          o.feedT = 0.3;
+        }
+        break;
+      }
+    }
+  }
+}
+
+let frameInput = { fx: 0, fy: 0, rot: 0, shoot: false, intake: false };
+
+function controlFrame() {
+  // Ground-plane "forward" for the current camera.
+  const f = new THREE.Vector3();
+  camera.getWorldDirection(f);
+  f.y = 0;
+  if (f.lengthSq() < 0.09) { f.copy(camera.up).applyQuaternion(camera.quaternion); f.y = 0; }
+  f.normalize();
+  return [f.x, f.z];
+}
+
+function step(dt) {
+  const { match, robots, fuel } = world;
+  match.update(dt, robots);
+
+  const enabled = match.enabled;
+  const [fx, fz] = controlFrame();
+  const inp = frameInput;
+  const pcmd = {
+    mx: fx * inp.fx + -fz * inp.fy,
+    mz: fz * inp.fx + fx * inp.fy,
+    rot: inp.rot,
+    shoot: inp.shoot,
+    intake: inp.intake || settings.autoIntake,
+  };
+  // Fixed shooters: holding shoot turns the chassis onto the target unless you're steering.
+  if (inp.shoot && world.player.fixedShooter && Math.abs(inp.rot) < 0.1 && world.player.fuel > 0) { pcmd.heading = world.player.aimHeading(); pcmd.headingGain = 8; }
+  world.player.update(dt, pcmd, world, enabled);
+  for (const a in world.brains) world.brains[a].update(dt);
+  for (const b of world.bots) b.r.update(dt, b.update(dt), world, enabled);
+
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 0; i < robots.length; i++) for (let j = i + 1; j < robots.length; j++) Robot.collidePair(robots[i], robots[j]);
+    for (const r of robots) r.collide(world);
+  }
+
+  fuel.step(dt, field.boxes, field.hubs, (alliance, i) => {
+    const counted = match.scoreFuel(alliance);
+    const sid = fuel.shooter[i];
+    if (counted && sid >= 0 && robots[sid] && robots[sid].alliance === alliance) robots[sid].stats.scored++;
+  }, match.t);
+  for (const r of robots) r.interactFuel(fuel, dt);
+  feedOutposts(dt);
+}
+
+// ---------- Camera ----------
+function updateCamera(dt) {
+  const r = world.player;
+  const s = side(r.alliance);
+  const k = camState.init ? Math.min(1, dt * 5) : 1;
+  const pos = new THREE.Vector3(), look = new THREE.Vector3();
+  camera.up.set(0, 1, 0);
+  if (camMode === 'driver') {
+    pos.set(s * (HL + 2.0), 3.0, -s * 1.8);
+    look.set(r.x * 0.5 - s * 2.0, 0, r.z * 0.5 - s * 0.6);
+  } else if (camMode === 'chase') {
+    let d = r.h - camState.yaw;
+    d = ((d + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+    camState.yaw += camState.init ? d * Math.min(1, dt * 3) : d;
+    const fx = Math.cos(camState.yaw), fz = -Math.sin(camState.yaw);
+    const ry = r.y + r.climbY;
+    pos.set(r.x - fx * 2.9, ry + 1.9, r.z - fz * 2.9);
+    look.set(r.x + fx * 1.6, ry + 0.3, r.z + fz * 1.6);
+  } else if (camMode === 'debug') {
+    pos.copy(camState.dbgPos);
+    look.copy(camState.dbgLook);
+  } else {
+    pos.set(r.x * 0.3, 11.5, 9.8);
+    look.set(r.x * 0.3, 0, 0.6);
+  }
+  camState.pos.lerp(pos, k);
+  camState.look.lerp(look, k);
+  camState.init = true;
+  camera.position.copy(camState.pos);
+  camera.lookAt(camState.look);
+}
+
+// ---------- HUD ----------
+const fmt = (t) => { t = Math.ceil(t); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
+let hudCache = {};
+const setText = (id, v) => { if (hudCache[id] !== v) { hudCache[id] = v; $(id).textContent = v; } };
+const setClass = (id, cls, on) => $(id).classList.toggle(cls, on);
+
+function updateHudStatic() {
+  hudCache = {};
+  const p = world.player;
+  $('robot-name').textContent = `${p.number} · ${p.p.name}`;
+  $('robot-card').style.setProperty('--ac', `#${COLORS[p.alliance].toString(16).padStart(6, '0')}`);
+}
+
+function toast(text, alliance) {
+  const el = document.createElement('div');
+  el.className = `toast ${alliance || ''}`;
+  el.textContent = text;
+  $('toasts').appendChild(el);
+  setTimeout(() => el.classList.add('out'), 2200);
+  setTimeout(() => el.remove(), 2800);
+}
+
+function updateHud() {
+  const { match, player } = world;
+  const practice = match.mode === 'practice';
+  setText('score-red', String(match.total('red')));
+  setText('score-blue', String(match.total('blue')));
+  let phase = { countdown: '準備', auto: 'Auto', pause: 'Auto 結束', teleop: '', post: '比賽結束', practice: '練習' }[match.phase];
+  if (match.phase === 'teleop') phase = match.segment().name;
+  setText('phase', phase);
+  setText('clock', practice ? '∞' : match.phase === 'countdown' ? String(Math.ceil(match.countdownEnd - match.t)) : fmt(match.clock));
+
+  for (const a of ['red', 'blue']) {
+    const on = match.hubActive(a);
+    const nt = match.nextToggle(a);
+    const warn = nt !== null && nt <= 3 && on;
+    setClass(`hub-${a}`, 'on', on);
+    setClass(`hub-${a}`, 'warn', warn);
+    setText(`hub-${a}-txt`, `${on ? '啟用' : '停用'}${nt !== null && nt < 30 ? ` · ${Math.ceil(nt)}s` : ''}`);
+    // HUB lights on the field.
+    const hub = field.hubs[a];
+    const blink = warn && Math.floor(match.t * 4) % 2 === 0;
+    hub.ledMat.emissiveIntensity = on ? (blink ? 0.2 : 1.8) : 0.05;
+  }
+
+  setText('fuel-count', `${player.fuel}`);
+  setText('fuel-cap', `/ ${player.p.capacity}`);
+  $('fuel-bar').style.width = `${(player.fuel / player.p.capacity) * 100}%`;
+  setText('stat-scored', `${player.stats.scored}`);
+  setText('stat-acc', player.stats.shots ? `${Math.round((player.stats.scored / player.stats.shots) * 100)}%` : '—');
+  setText('intake-state', player.intakeOn ? 'Intake 開' : 'Intake 關');
+  setClass('intake-state', 'on', !!player.intakeOn);
+  setText('aim-state', player.aimMode === 'hub' ? '瞄準 HUB' : '傳球模式');
+  setClass('aim-state', 'pass', player.aimMode !== 'hub');
+
+  let prompt = '';
+  if (player.climbing) prompt = `TOWER 上 — ${player.climbLevel ? 'L' + player.climbLevel : '攀爬中…'}   [C] 往上  [X] 往下`;
+  else if (player.inClimbZone(world) && match.enabled) prompt = '[C] 攀爬 TOWER';
+  else if (player.aimMode === 'pass' && player.fuel > 0) prompt = '不在己方區域 — 射擊會變成傳球';
+  else if (match.enabled && !match.hubActive(player.alliance) && player.fuel > 0) prompt = '己方 HUB 停用中 — 先囤積 FUEL';
+  setText('prompt', prompt);
+  $('prompt').hidden = !prompt;
+}
+
+function handleEvents() {
+  const m = world.match;
+  while (m.events.length) {
+    const e = m.events.shift();
+    if (e.type === 'phase') {
+      if (e.phase === 'auto') toast('AUTO', 'neutral');
+      if (e.phase === 'teleop') toast('TELEOP', 'neutral');
+      if (e.phase === 'post') toast('比賽結束', 'neutral');
+    } else if (e.type === 'autoWinner') {
+      toast(`${e.alliance === 'red' ? '紅' : '藍'}聯盟贏得 AUTO — 其 HUB 先停用`, e.alliance);
+    } else if (e.type === 'final') {
+      showResults();
+    }
+  }
+  if (m.phase === 'teleop') {
+    const seg = m.segment().name;
+    if (seg !== world.lastSeg) {
+      world.lastSeg = seg;
+      if (seg.startsWith('Shift')) {
+        const act = ['red', 'blue'].filter((a) => m.hubActive(a));
+        toast(`${seg}：${act.map((a) => (a === 'red' ? '紅' : '藍')).join('、')} HUB 啟用`, act.length === 1 ? act[0] : 'neutral');
+      } else if (seg === 'Endgame') toast('ENDGAME — 兩邊 HUB 都啟用', 'neutral');
+    }
+  }
+}
+
+function showResults() {
+  const m = world.match;
+  const row = (label, fn) => `<tr><td>${label}</td><td class="r">${fn('red')}</td><td class="b">${fn('blue')}</td></tr>`;
+  const rp = { red: m.rankingPoints('red'), blue: m.rankingPoints('blue') };
+  const rpTxt = (a) => {
+    const x = rp[a];
+    return `${x.win + x.energized + x.supercharged + x.traversal} <small>${[x.energized && 'E', x.supercharged && 'S', x.traversal && 'T'].filter(Boolean).join(' ')}</small>`;
+  };
+  const r = m.total('red'), b = m.total('blue');
+  const winner = r > b ? '紅聯盟獲勝' : b > r ? '藍聯盟獲勝' : '平手';
+  const me = world.player;
+  $('results-body').innerHTML = `
+    <h2 class="${r > b ? 'r' : b > r ? 'b' : ''}">${winner}</h2>
+    <table>
+      <tr><th></th><th class="r">紅</th><th class="b">藍</th></tr>
+      ${row('Auto FUEL', (a) => m.score[a].autoFuel)}
+      ${row('Teleop FUEL', (a) => m.score[a].teleFuel)}
+      ${row('Auto TOWER', (a) => m.score[a].autoTower)}
+      ${row('結束 TOWER', (a) => m.score[a].teleTower)}
+      <tr class="total"><td>總分</td><td class="r">${r}</td><td class="b">${b}</td></tr>
+      ${row('Ranking Points', rpTxt)}
+    </table>
+    <p class="mine">你（${me.number}）：得分 ${me.stats.scored} 顆 FUEL · 射出 ${me.stats.shots} 顆 · 吸入 ${me.stats.intaked} 顆</p>
+    <p class="hint">RP：E = Energized（≥100 FUEL）、S = Supercharged（≥360 FUEL）、T = Traversal（TOWER ≥50 分）</p>`;
+  $('results').hidden = false;
+}
+
+// ---------- Menu ----------
+function fillMenu() {
+  const presetSel = $('opt-preset');
+  const opts = (real) => Object.entries(ROBOT_PRESETS).filter(([, p]) => !!p.real === real).map(([k, p]) => `<option value="${k}">${p.name}</option>`).join('');
+  presetSel.innerHTML = `<optgroup label="2026 真實機器人">${opts(true)}</optgroup><optgroup label="通用">${opts(false)}</optgroup>`;
+  if (!ROBOT_PRESETS[settings.preset]) settings.preset = DEFAULTS.preset;
+  const skillOpts = Object.entries(BOT_SKILL).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
+  $('opt-ally-skill').innerHTML = skillOpts;
+  $('opt-opp-skill').innerHTML = skillOpts;
+  const tacOpts = Object.entries(TACTICS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
+  $('opt-ally-tactic').innerHTML = tacOpts;
+  $('opt-opp-tactic').innerHTML = `<option value="random">隨機</option>${tacOpts}`;
+  for (const [id, key] of [['opt-mode', 'mode'], ['opt-alliance', 'alliance'], ['opt-preset', 'preset'], ['opt-ally-skill', 'allySkill'], ['opt-opp-skill', 'oppSkill'], ['opt-ally-tactic', 'allyTactic'], ['opt-opp-tactic', 'oppTactic'], ['opt-camera', 'camera']]) {
+    if (settings[key] === undefined || ![...$(id).options].some((o) => o.value === settings[key])) settings[key] = DEFAULTS[key];
+    const el = $(id);
+    el.value = settings[key];
+    el.onchange = () => { settings[key] = el.value; saveSettings(); describe(); };
+  }
+  $('opt-team').value = settings.team;
+  $('opt-team').onchange = () => { settings.team = Math.max(1, Math.min(99999, parseInt($('opt-team').value, 10) || 9999)); $('opt-team').value = settings.team; saveSettings(); };
+  $('opt-intake').checked = settings.autoIntake;
+  $('opt-intake').onchange = () => { settings.autoIntake = $('opt-intake').checked; saveSettings(); };
+  $('opt-roles').checked = settings.showRoles;
+  $('opt-roles').onchange = () => { settings.showRoles = $('opt-roles').checked; saveSettings(); };
+  $('opt-shadows').checked = settings.shadows;
+  $('opt-shadows').onchange = () => {
+    settings.shadows = $('opt-shadows').checked; saveSettings();
+    renderer.shadowMap.enabled = settings.shadows;
+    scene.traverse((o) => { if (o.material) o.material.needsUpdate = true; });
+  };
+  describe();
+}
+
+function describe() {
+  const pr = ROBOT_PRESETS[settings.preset];
+  $('preset-desc').textContent = `${pr.desc}  容量 ${pr.capacity} · 射速 ${pr.fireRate}/秒 · 最高 L${pr.climbMax}${pr.fitsTrench ? ' · 可鑽 TRENCH' : ''}`;
+  $('opt-team').disabled = !!pr.team;
+  if (pr.team) $('opt-team').value = pr.team; else $('opt-team').value = settings.team;
+  for (const el of document.querySelectorAll('.bot-opt')) el.hidden = settings.mode !== 'match';
+}
+
+function startGame() {
+  $('menu').hidden = true;
+  camMode = settings.camera;
+  newWorld();
+  input.clearEdges();
+}
+
+$('btn-start').onclick = startGame;
+$('btn-resume').onclick = () => { paused = false; $('pause').hidden = true; };
+$('btn-restart').onclick = () => newWorld();
+$('btn-menu').onclick = () => { $('pause').hidden = true; $('menu').hidden = false; paused = true; };
+$('btn-again').onclick = () => newWorld();
+$('btn-results-menu').onclick = () => { $('results').hidden = true; $('menu').hidden = false; paused = true; };
+$('btn-help').onclick = () => { $('help').hidden = !$('help').hidden; };
+fillMenu();
+
+// ---------- Loop ----------
+let last = performance.now();
+let acc = 0;
+const fps = { n: 0, t: 0 };
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+
+  if (world && $('menu').hidden) {
+    if (input.pressed('Escape') || input.pressed('KeyP')) {
+      if ($('results').hidden) { paused = !paused; $('pause').hidden = !paused; }
+    }
+    if (input.pressed('KeyV')) {
+      const modes = ['driver', 'chase', 'broadcast'];
+      camMode = modes[(modes.indexOf(camMode) + 1) % modes.length];
+      camState.init = false;
+      toast(`鏡頭：${{ driver: 'Driver Station', chase: '跟車', broadcast: '轉播' }[camMode]}`, 'neutral');
+    }
+    if (input.pressed('KeyR')) newWorld();
+    if (input.pressed('KeyH')) $('help').hidden = !$('help').hidden;
+    if (input.pressed('KeyI')) { settings.autoIntake = !settings.autoIntake; saveSettings(); $('opt-intake').checked = settings.autoIntake; }
+    if (input.pressed('KeyC')) world.player.requestClimb(world);
+    if (input.pressed('KeyX')) world.player.descend();
+
+    if (!paused) {
+      frameInput = input.read();
+      acc += dt;
+      let n = 0;
+      while (acc >= STEP && n < 12) { step(STEP); acc -= STEP; n++; }
+      if (n === 12) acc = 0;
+      handleEvents();
+    }
+    for (const b of world.bots) b.r.setTag(settings.showRoles ? ROLE_LABEL[b.role] : null, b.r.alliance === world.player.alliance ? '#bfe3ff' : '#ffc2c6');
+    for (const r of world.robots) r.syncMesh(dt);
+    world.fuel.render();
+    updateCamera(dt);
+    updateHud();
+  } else if (!world) {
+    // Idle orbit behind the menu.
+    const a = now / 9000;
+    camera.position.set(Math.cos(a) * 12, 7, Math.sin(a) * 9);
+    camera.lookAt(0, 0, 0);
+  } else {
+    input.clearEdges();
+  }
+
+  document.body.classList.toggle('in-menu', !$('menu').hidden);
+  fps.n++; fps.t += dt;
+  if (fps.t > 0.5) { $('fps').textContent = `${Math.round(fps.n / fps.t)} fps`; fps.n = 0; fps.t = 0; }
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(frame);
+
+// Expose for debugging in the console.
+window.sim = {
+  get world() { return world; },
+  settings,
+  step(n = 1, cmd) { if (cmd) frameInput = { fx: 0, fy: 0, rot: 0, shoot: false, intake: false, ...cmd }; for (let i = 0; i < n; i++) step(STEP); handleEvents(); },
+  cam(m) { camMode = m; camState.init = false; },
+  view(p, l) { camMode = 'debug'; camState.dbgPos = new THREE.Vector3(...p); camState.dbgLook = new THREE.Vector3(...l); camState.init = false; },
+  draw() { for (const r of world.robots) r.syncMesh(1 / 30); world.fuel.render(); updateCamera(1 / 30); updateHud(); renderer.render(scene, camera); },
+};
