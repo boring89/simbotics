@@ -22,7 +22,7 @@ export const ROLE_LABEL = {
 
 const wrap = (a) => ((a + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
 // Behaviour switches (tuning experiments).
-const F = (globalThis.AIFLAGS ??= { exitCatch: true, zoneCamp: true, fixedMove: true, campDepth: 9, bumpLoop: true, loopWait: false });
+const F = (globalThis.AIFLAGS ??= { exitCatch: true, zoneCamp: true, fixedMove: true, campDepth: 9, bumpLoop: true, loopWait: false, fireDepth: 1.2, autoReach: -1.5, bumpCost: 1.5 });
 
 // Coarse count of loose FUEL on the carpet, shared by every bot and refreshed a few times a second.
 const CELL = 0.6;
@@ -277,12 +277,14 @@ export class Bot {
     for (const h of lines) {
       const dir = Math.sign(tx - h) || 1;
       const zMid = (cz + tz) / 2;
-      // Pick the closest lane, but route around one an opponent is sitting in.
+      // Pick the closest lane, but route around one an opponent is sitting in. Robots that fit
+      // can prefer the flat TRENCH over climbing a BUMP (bumpCost, in metres of detour).
+      const bumpCost = this.lvl >= 2 && r.p.fitsTrench ? F.bumpCost : 0;
       const blocked = (l) => this.lvl >= 2 && this.w.robots.some((o) => o.alliance !== r.alliance && !o.climbing
         && Math.abs(o.z - l) < 0.9 && Math.abs(o.x - h) < 1.4);
       let lane = null, bestC = Infinity;
       for (const l of this.lanes()) {
-        const c = Math.abs(l - zMid) + (blocked(l) ? 3 : 0);
+        const c = Math.abs(l - zMid) + (blocked(l) ? 3 : 0) + (TRENCH_LANES.includes(l) ? 0 : bumpCost);
         if (c < bestC) { bestC = c; lane = l; }
       }
       // Skip the approach/exit waypoint when we're already (or will end up) right on the BUMP.
@@ -613,7 +615,7 @@ export class Bot {
 
   // ---------- Roles ----------
 
-  // AUTO: dump the preload, swipe our half of the neutral zone (never past the centre line),
+  // AUTO: dump the preload, swipe the neutral zone (a little past the centre line),
   // come back and shoot. The weakest bot works the DEPOT and hangs L1.
   doAuto(cmd, dt) {
     const r = this.r, m = this.w.match, s = side(r.alliance);
@@ -638,21 +640,24 @@ export class Bot {
       cmd.intake = true;
       return this.goTo(sx, sz);
     }
-    // Team Update 22: don't fully cross the centre line in AUTO.
-    const ownHalf = (x) => s * x > 0.35;
+    // Team Update 22 says not to fully cross the centre line in AUTO, but on the field a robot
+    // drifting a little past it is rarely called, and top teams do. Sweep up to autoReach
+    // (alliance-local metres, negative = past the line).
+    const ownHalf = (x) => s * x > F.autoReach;
     return this.collect(cmd, dt, ownHalf) || [0, 0, 0];
   }
 
   // 254-style loop for fixed rear shooters, with the nose always toward our own wall:
-  // fire from the BUMP crest (just over the zone line, drum facing the HUB), back down off the
-  // BUMP to the HUB's neutral side and let our own FUEL roll out of the exits into the intake,
-  // scoop up what got knocked around nearby, drive forward onto the BUMP and fire again.
+  // fire from just behind the BUMP (fireDepth into the zone, drum facing the HUB; any closer and
+  // the robot sits in the lane everyone drives through, getting shoved off its aim), back over
+  // the BUMP to the HUB's neutral side and let our own FUEL roll out of the exits into the
+  // intake, scoop up what got knocked around nearby, drive back over the BUMP and fire again.
   bumpLoop(cmd, dt, inOwn) {
     const r = this.r, s = side(r.alliance), f = this.w.fuel, m = this.w.match, a = r.alliance;
     const cap = r.p.capacity;
     const hub = this.w.field.hubs[a];
     this.loopLane = this.brain.laneFor(this);
-    const fireX = s * (ZONE_X + 0.14), fireZ = this.loopLane;
+    const fireX = s * (ZONE_X + F.fireDepth), fireZ = this.loopLane;
     const catchX = hub.x - s * (HUB_HALF + 0.42 + r.p.halfL), catchZ = 0;
     const pending = f.hubQueue.reduce((n, q) => n + (q.alliance === a), 0);
     const nose = s > 0 ? 0 : Math.PI;
@@ -813,9 +818,9 @@ export class Bot {
   doStage(cmd, dt, inOwn) {
     const r = this.r;
     cmd.intake = true;
-    // Fixed shooters wait on the BUMP crest so the first shot of the shift is already lined up.
+    // Fixed shooters wait on their firing spot so the first shot of the shift is already lined up.
     const [sx, sz] = r.fixedShooter && this.lvl >= 2 && F.bumpLoop
-      ? [side(r.alliance) * (ZONE_X + 0.14), this.brain.laneFor(this)] : this.stageSpot();
+      ? [side(r.alliance) * (ZONE_X + F.fireDepth), this.brain.laneFor(this)] : this.stageSpot();
     const mv = this.goTo(sx, sz);
     if (mv[2] < 0.5 && inOwn) { mv[0] = 0; mv[1] = 0; }
     cmd.shoot = inOwn && r.fuel > 0 && this.scoringOnArrival();
