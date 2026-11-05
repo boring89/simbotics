@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Simbotics Bench</title>
+  <style>
+    :root { --bg: #0e1116; --panel: #161a21; --line: rgba(255,255,255,.1); --text: #e8ebf0; --muted: #8b93a1; --good: #86efac; --bad: #ff8a91; --fuel: #f6d31c; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, "Noto Sans TC", sans-serif; padding: 16px; }
+    main { max-width: 860px; margin: 0 auto; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    p { color: var(--muted); margin: 0 0 12px; }
+    button { font: inherit; color: #1b1600; background: var(--fuel); border: 0; border-radius: 8px; padding: 8px 18px; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: default; }
+    label { color: var(--muted); margin-left: 12px; }
+    input { width: 56px; font: inherit; background: #0b0d12; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
+    #status { margin: 12px 0; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; background: var(--panel); border-radius: 8px; }
+    th, td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+    th:first-child, td:first-child { text-align: left; }
+    th { color: var(--muted); font-weight: 600; }
+    .good { color: var(--good); } .bad { color: var(--bad); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Simbotics 電腦基準測試</h1>
+  <p>在背景（Web Worker）跑整場比賽、不畫畫面。基準：玩家位置換成不加成的愛因斯坦電腦，其他照你那 13 場的陣容（隊友 2 台 254、對手 3 台 254，皆傳奇／全力進攻），和你的平均進球比較。</p>
+  <div>
+    <button id="go">開始</button>
+    <label>每台車場數 <input id="n" type="number" min="1" max="50" value="8"></label>
+    <label>Worker <input id="w" type="number" min="1" max="32"></label>
+  </div>
+  <div id="status">尚未執行</div>
+  <div class="wrap"><table id="out"></table></div>
+</main>
+<script type="module">
+// Your averages from the 13 logged matches (FUEL scored by your robot).
+const TARGET = { overload: 656, ripcurrent: 649, kepler: 660, alphadogs: 510 };
+const NAMES = { overload: '254 Overload', ripcurrent: '4414 RIPCURRENT', kepler: '1690 Kepler', alphadogs: '4946 The Alpha Dogs' };
+
+const BASE = {
+  mode: 'match', alliance: 'blue', team: 9999,
+  allySkill: 'legend', oppSkill: 'legend', allyTactic: 'offense', oppTactic: 'offense',
+  allyBots: ['overload', 'overload'], oppBots: ['overload', 'overload', 'overload'],
+};
+
+// A pool of workers fed from a job queue. run(jobs) resolves with every result.
+class Pool {
+  constructor(n) { this.n = n; this.workers = []; }
+  async start() {
+    const ready = [];
+    for (let i = 0; i < this.n; i++) {
+      const w = new Worker('./worker.js', { type: 'module' });
+      ready.push(new Promise((res, rej) => {
+        w.onmessage = (e) => { if (e.data.ready) res(); };
+        w.onerror = (e) => rej(e.message || 'worker failed to load');
+      }));
+      this.workers.push(w);
+    }
+    await Promise.all(ready);
+  }
+  run(jobs, onResult) {
+    const queue = [...jobs], results = [];
+    return new Promise((resolve) => {
+      let busy = 0;
+      const feed = (w) => {
+        if (!queue.length) { if (busy === 0) resolve(results); return; }
+        busy++;
+        w.onmessage = (e) => { busy--; results.push(e.data); onResult?.(e.data, results.length, jobs.length); feed(w); if (!queue.length && busy === 0) resolve(results); };
+        w.postMessage(queue.shift());
+      };
+      this.workers.forEach(feed);
+    });
+  }
+}
+
+let pool = null;
+async function getPool(n) {
+  if (pool && pool.n === n) return pool;
+  pool?.workers.forEach((w) => w.terminate());
+  pool = new Pool(n);
+  await pool.start();
+  return pool;
+}
+
+// The benchmark: each logged robot in your seat, driven by an unboosted Einstein bot.
+function benchJobs(n, flags = {}, seed0 = 1) {
+  const jobs = [];
+  for (const preset of Object.keys(TARGET)) {
+    for (let k = 0; k < n; k++) {
+      jobs.push({ id: `${preset}:${k}`, preset, seed: seed0 + k, flags, playerBot: 'einstein', settings: { ...BASE, preset } });
+    }
+  }
+  return jobs;
+}
+
+function summarize(results) {
+  const by = {};
+  for (const r of results) {
+    if (r.error) continue;
+    const me = r.robots.find((x) => x.player);
+    (by[me.preset] ??= []).push({ scored: me.scored, blue: r.fuel.blue, red: r.fuel.red });
+  }
+  const mean = (a) => a.reduce((s, x) => s + x, 0) / a.length;
+  const rows = Object.keys(TARGET).filter((k) => by[k]).map((k) => {
+    const s = by[k].map((x) => x.scored);
+    const sd = Math.sqrt(mean(s.map((x) => (x - mean(s)) ** 2)));
+    return { preset: k, n: s.length, mean: Math.round(mean(s)), sd: Math.round(sd), target: TARGET[k], pct: Math.round((mean(s) / TARGET[k]) * 100), blue: Math.round(mean(by[k].map((x) => x.blue))), red: Math.round(mean(by[k].map((x) => x.red))) };
+  });
+  const all = rows.length ? Math.round(rows.reduce((s, r) => s + r.pct, 0) / rows.length) : 0;
+  return { rows, pct: all };
+}
+
+function render(sum) {
+  const head = '<tr><th>你的位置</th><th>場數</th><th>電腦進球</th><th>標準差</th><th>你的平均</th><th>達成率</th><th>藍方 FUEL</th><th>紅方 FUEL</th></tr>';
+  document.getElementById('out').innerHTML = head + sum.rows.map((r) =>
+    `<tr><td>${NAMES[r.preset]}</td><td>${r.n}</td><td>${r.mean}</td><td>±${r.sd}</td><td>${r.target}</td><td class="${r.pct >= 100 ? 'good' : 'bad'}">${r.pct}%</td><td>${r.blue}</td><td>${r.red}</td></tr>`).join('')
+    + `<tr><td><b>平均</b></td><td></td><td></td><td></td><td></td><td class="${sum.pct >= 100 ? 'good' : 'bad'}"><b>${sum.pct}%</b></td><td></td><td></td></tr>`;
+}
+
+// Runs jobs on the pool; also exposed for scripted tuning from the console.
+async function run(jobs, workers) {
+  const p = await getPool(workers);
+  const t0 = performance.now();
+  const status = document.getElementById('status');
+  const res = await p.run(jobs, (r, done, total) => {
+    status.textContent = `${done} / ${total} 場 · ${((performance.now() - t0) / 1000).toFixed(0)} 秒${r.error ? ' · 有錯誤：' + r.error.split('\n')[0] : ''}`;
+  });
+  status.textContent = `完成 ${res.length} 場，${((performance.now() - t0) / 1000).toFixed(0)} 秒`;
+  return res;
+}
+
+const wIn = document.getElementById('w');
+wIn.value = Math.max(1, (navigator.hardwareConcurrency || 4) - 1);
+document.getElementById('go').onclick = async (e) => {
+  e.target.disabled = true;
+  try {
+    const res = await run(benchJobs(+document.getElementById('n').value), +wIn.value);
+    window.bench.last = res;
+    render(summarize(res));
+  } finally { e.target.disabled = false; }
+};
+// ---------- Parameter search ----------
+// Hill climbing over the AI's tunable numbers. Blue runs the candidate, red stays on defaults,
+// and the score is blue's mean FUEL over a fixed set of seeded matches: the benchmark lineup
+// for each robot in your seat, plus random lineups so the result isn't 254-only.
+const SPACE = {
+  fireDepth: [0.3, 2.6], autoReach: [-3, 0.4], bumpCost: [0, 3.5], campDepth: [1.5, 9],
+  homeScore: [0, 4], homeOther: [0, 1.5], nbr: [0, 1], mateMul: [0, 1], crossCost: [0, 4],
+  pickOverhead: [0.2, 3], wallMul: [0.1, 1], cornerMul: [0, 1], retFull: [0.5, 1],
+  retSlack: [0.5, 5], retLoad: [3, 30], retFar: [1, 6], autoFull: [0.4, 1], loopFull: [0.5, 1],
+  loopSlack: [0, 5], loopFar: [1, 6], loopFarLoad: [0.2, 0.9], catchLoad: [0.3, 3], catchMin: [1, 10],
+  passKeep: [0, 1],
+};
+const PRESETS = Object.keys(TARGET);
+const ALL_BOTS = ['overload', 'ripcurrent', 'kepler', 'alphadogs', 'artemis', 'balanced', 'shuttle', 'hopper'];
+
+function evalJobs(params, seed0, perPreset = 4, mixed = 8) {
+  const jobs = [];
+  const aiParams = { blue: params };
+  for (const preset of PRESETS) for (let k = 0; k < perPreset; k++) {
+    jobs.push({ id: `b:${preset}:${k}`, seed: seed0 + k, playerBot: 'einstein', settings: { ...BASE, preset, aiParams } });
+  }
+  for (let k = 0; k < mixed; k++) {
+    // The lineup comes from the seed, so every candidate sees the same mixed matches.
+    let x = (Math.imul(seed0, 7919) + Math.imul(k, 104729)) >>> 0;
+    const pick = (list) => { x = (Math.imul(x, 1103515245) + 12345) >>> 0; return list[(x >>> 16) % list.length]; };
+    jobs.push({ id: `m:${k}`, seed: seed0 + 1000 + k, playerBot: 'einstein', settings: { ...BASE, preset: pick(PRESETS), allyBots: [pick(ALL_BOTS), pick(ALL_BOTS)], oppBots: [pick(ALL_BOTS), pick(ALL_BOTS), pick(ALL_BOTS)], aiParams } });
+  }
+  return jobs;
+}
+
+function score(results) {
+  const ok = results.filter((r) => !r.error);
+  const mean = (f) => ok.reduce((s, r) => s + f(r), 0) / ok.length;
+  return { blue: mean((r) => r.fuel.blue), red: mean((r) => r.fuel.red), seat: mean((r) => r.robots.find((x) => x.player).scored), n: ok.length, errors: results.length - ok.length };
+}
+
+const clamp = (v, [lo, hi]) => Math.min(hi, Math.max(lo, v));
+const gauss = () => Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
+
+async function tune({ iters = 120, rotate = 15, workers = 11, start = null } = {}) {
+  const st = window.bench.tuneState = { running: true, iter: 0, history: [], best: null, bestScore: null, accepted: 0 };
+  const defaults = Object.fromEntries(Object.keys(SPACE).map((k) => [k, window.bench.DEFAULTS[k]]));
+  let best = { ...defaults, ...start };
+  let seed0 = 10000;
+  let bestScore = score(await run(evalJobs(best, seed0), workers));
+  st.best = best; st.bestScore = bestScore;
+  for (let i = 1; i <= iters && st.running; i++) {
+    st.iter = i;
+    if (i % rotate === 0) {
+      // Fresh seeds now and then, so we don't tune to one set of matches.
+      seed0 += 100;
+      bestScore = score(await run(evalJobs(best, seed0), workers));
+      st.bestScore = bestScore;
+    }
+    const cand = { ...best };
+    const keys = Object.keys(SPACE).sort(() => Math.random() - 0.5).slice(0, 1 + Math.floor(Math.random() * 3));
+    for (const k of keys) {
+      const [lo, hi] = SPACE[k];
+      cand[k] = +clamp(cand[k] + gauss() * (hi - lo) * 0.18, SPACE[k]).toFixed(3);
+    }
+    const sc = score(await run(evalJobs(cand, seed0), workers));
+    const ok = sc.blue > bestScore.blue + 4;
+    st.history.push({ i, keys, vals: keys.map((k) => cand[k]), blue: Math.round(sc.blue), vs: Math.round(bestScore.blue), ok });
+    if (ok) { best = cand; bestScore = sc; st.best = best; st.bestScore = sc; st.accepted++; }
+  }
+  st.running = false;
+  return st;
+}
+
+window.bench = { run, benchJobs, summarize, render, TARGET, BASE, last: null, evalJobs, score, tune, SPACE, DEFAULTS: null };
+// The defaults live in the AI module; read them once for the search's starting point.
+import('../js/ai.js').then((m) => { window.bench.DEFAULTS = { ...m.AI_DEFAULTS }; });
+</script>
+</body>
+</html>

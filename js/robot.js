@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from './three.js';
 import { HL, HW, G, BALL_R, HUB_TOP, ZONE_X, side, groundHeight } from './config.js';
 import { inZone, inRect } from './field.js';
 import { buildRobotModel } from './models.js';

@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from './three.js';
 import {
   FIELD_L, FIELD_W, HL, HW, HUB_X, HUB_HALF, HUB_TOP, ZONE_X, BUMP, TRENCH,
   TOWER, DEPOT, OUTPOST, COLORS, side, groundHeight,

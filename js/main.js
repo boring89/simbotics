@@ -1,12 +1,8 @@
-import * as THREE from 'three';
-import {
-  HL, ZONE_X, DEPOT, STAGE, ROBOT_PRESETS, BOT_SKILL, COLORS, side, other,
-} from './config.js';
+import * as THREE from './three.js';
+import { HL, ROBOT_PRESETS, BOT_SKILL, COLORS, side, other } from './config.js';
 import { buildField, inZone } from './field.js';
-import { Fuel } from './fuel.js';
-import { Robot } from './robot.js';
-import { Match } from './match.js';
-import { Bot, TeamBrain, TACTICS, ROLE_LABEL } from './ai.js';
+import { TACTICS, ROLE_LABEL } from './ai.js';
+import { createWorld, stepWorld } from './sim.js';
 import { Input } from './input.js';
 import { MatchLog, robotName } from './log.js';
 
@@ -69,91 +65,15 @@ let paused = false;
 let camMode = settings.camera;
 const camState = { yaw: 0, pos: new THREE.Vector3(), look: new THREE.Vector3(), init: false };
 
-function randomTeam(used) {
-  let n;
-  do { n = 100 + Math.floor(Math.random() * 9800); } while (used.has(n));
-  used.add(n);
-  return n;
-}
-
 function newWorld() {
   if (world) {
     scene.remove(world.fuel.mesh);
     world.fuel.mesh.geometry.dispose();
     for (const r of world.robots) { scene.remove(r.mesh); if (r.tag) scene.remove(r.tag); }
   }
-  const mode = settings.mode;
-  const match = new Match(mode === 'practice' ? 'practice' : 'match');
-  const robots = [];
-  const used = new Set([+settings.team]);
-  const me = settings.alliance;
-  const myPreset = ROBOT_PRESETS[settings.preset];
-  const player = new Robot(0, me, myPreset.team ?? settings.team, myPreset, true);
-  used.add(player.number);
-  robots.push(player);
-  if (mode === 'match') {
-    // Picked robots first; "random" slots get the real 2026 robots nobody took (shuffled),
-    // topped up with generic ones.
-    const picks = [...settings.allyBots, ...settings.oppBots];
-    const real = Object.keys(ROBOT_PRESETS).filter((k) => ROBOT_PRESETS[k].real && k !== settings.preset && !picks.includes(k));
-    for (let i = real.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [real[i], real[j]] = [real[j], real[i]]; }
-    const pool = [...real, 'balanced', 'shuttle', 'hopper'];
-    for (let i = 0; i < 5; i++) {
-      const pr = ROBOT_PRESETS[ROBOT_PRESETS[picks[i]] ? picks[i] : pool.shift()];
-      const num = pr.team && !used.has(pr.team) ? pr.team : randomTeam(used);
-      used.add(num);
-      robots.push(new Robot(robots.length, i < 2 ? me : other(me), num, pr, false));
-    }
-  }
-
-  const neutral = STAGE.neutralCols * STAGE.neutralRows;
-  const total = neutral + STAGE.depot * 2 + STAGE.outpost * 2 + STAGE.preload * robots.length + 40;
-  const fuel = new Fuel(scene, total);
-  const sp = 0.152;
-  for (let i = 0; i < STAGE.neutralCols; i++) {
-    for (let j = 0; j < STAGE.neutralRows; j++) {
-      fuel.spawn((i - (STAGE.neutralCols - 1) / 2) * sp, 0.075, (j - (STAGE.neutralRows - 1) / 2) * sp);
-    }
-  }
-  for (const a of ['red', 'blue']) {
-    const s = side(a);
-    for (let k = 0; k < STAGE.depot; k++) {
-      const cx = DEPOT.x0 + 0.08 + (k % 4) * 0.155, cz = DEPOT.z0 + 0.1 + Math.floor(k / 4) * 0.155;
-      fuel.spawn(s * cx, 0.075, s * cz);
-    }
-    field.outposts[a].stock = STAGE.outpost;
-    field.outposts[a].feedT = 0;
-  }
-  // The extra pool slots stay inactive: they back preloads and OUTPOST stock.
-
-  // Starting line positions, facing the neutral zone.
-  const starts = [-1.65, 1.65, -3.37];
-  for (const a of ['red', 'blue']) {
-    const s = side(a);
-    robots.filter((r) => r.alliance === a).forEach((r, k) => {
-      r.place(s * (ZONE_X + 0.5), s * starts[k], s > 0 ? Math.PI : 0);
-      r.fuel = STAGE.preload;
-      scene.add(r.mesh);
-    });
-  }
-
-  world = { match, robots, fuel, field, towers: field.towers, bots: [], player, lastSeg: null, toastQ: [], brains: {} };
+  const mode = settings.mode, me = settings.alliance;
+  world = createWorld(scene, field, settings);
   world.log = settings.logMode && mode !== 'practice' ? new MatchLog(world, settings) : null;
-  // One strategy brain per alliance; teammates and opponents can use different levels and tactics.
-  const keys = Object.keys(TACTICS);
-  for (const a of ['red', 'blue']) {
-    const mine = a === me;
-    const skill = BOT_SKILL[mine ? settings.allySkill : settings.oppSkill] || BOT_SKILL.hard;
-    let tactic = mine ? settings.allyTactic : settings.oppTactic;
-    if (!TACTICS[tactic]) tactic = keys[Math.floor(Math.random() * keys.length)];
-    world.brains[a] = new TeamBrain(world, a, tactic, skill);
-  }
-  const slots = { red: 0, blue: 0 };
-  for (const r of robots) {
-    if (r.isPlayer) { slots[r.alliance]++; continue; }
-    const brain = world.brains[r.alliance];
-    world.bots.push(new Bot(r, world, brain.skill, slots[r.alliance]++ % 3, brain));
-  }
   if (mode === 'match') {
     const t = world.brains[other(me)];
     setTimeout(() => toast(`對手：${t.skill.name} · ${TACTICS[t.tactic]}`, other(me)), 400);
@@ -167,28 +87,6 @@ function newWorld() {
 }
 
 // ---------- Simulation step ----------
-function feedOutposts(dt) {
-  for (const a of ['red', 'blue']) {
-    const o = field.outposts[a];
-    if (world.match.mode === 'practice' && o.stock < 5) o.stock = 24;
-    o.stockG.children.forEach((b, i) => { b.visible = i < o.stock; });
-    o.feedT -= dt;
-    if (o.stock <= 0 || o.feedT > 0 || !world.match.enabled) continue;
-    for (const r of world.robots) {
-      if (r.alliance !== a || !r.intakeOn || r.fuel >= r.p.capacity) continue;
-      const [lx, lz] = r.toLocal(o.mouth.x, o.mouth.z);
-      if (lx > 0.2 && lx < 1.3 && Math.abs(lz) < 0.45) {
-        const sp = 1.6 + Math.random() * 0.3;
-        if (world.fuel.spawn(o.mouth.x, o.mouth.y, o.mouth.z + (Math.random() - 0.5) * 0.1, o.dir.x * sp, 0, (Math.random() - 0.5) * 0.3) >= 0) {
-          o.stock--;
-          o.feedT = 0.3;
-        }
-        break;
-      }
-    }
-  }
-}
-
 let frameInput = { fx: 0, fy: 0, rot: 0, aim: null, shoot: false, intake: false };
 
 // Auto-shoot: fire whenever we're in our zone with FUEL and the shot will land in an active HUB.
@@ -211,10 +109,6 @@ function controlFrame() {
 }
 
 function step(dt) {
-  const { match, robots, fuel } = world;
-  match.update(dt, robots);
-
-  const enabled = match.enabled;
   const [fx, fz] = controlFrame();
   const inp = frameInput;
   const pcmd = {
@@ -233,23 +127,7 @@ function step(dt) {
     // Fixed shooters: shooting turns the chassis onto the target unless you're steering.
     pcmd.heading = world.player.aimHeading(); pcmd.headingGain = 8;
   }
-  world.player.update(dt, pcmd, world, enabled);
-  for (const a in world.brains) world.brains[a].update(dt);
-  for (const b of world.bots) b.r.update(dt, b.update(dt), world, enabled);
-
-  for (let pass = 0; pass < 2; pass++) {
-    for (let i = 0; i < robots.length; i++) for (let j = i + 1; j < robots.length; j++) Robot.collidePair(robots[i], robots[j]);
-    for (const r of robots) r.collide(world);
-  }
-
-  fuel.step(dt, field.boxes, field.hubs, (alliance, i) => {
-    const counted = match.scoreFuel(alliance);
-    const sid = fuel.shooter[i];
-    if (counted && sid >= 0 && robots[sid] && robots[sid].alliance === alliance) robots[sid].stats.scored++;
-  }, match.t);
-  for (const r of robots) r.interactFuel(fuel, dt);
-  feedOutposts(dt);
-  if (world.log) world.log.step(dt);
+  stepWorld(world, dt, pcmd);
 }
 
 // ---------- Camera ----------

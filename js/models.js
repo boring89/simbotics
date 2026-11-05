@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from './three.js';
 import { COLORS } from './config.js';
 
 // Per-robot 3D models. Each builder fills `g` (robot-local: +x = intake/front, y up)

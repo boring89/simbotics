@@ -21,8 +21,39 @@ export const ROLE_LABEL = {
 };
 
 const wrap = (a) => ((a + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-// Behaviour switches (tuning experiments).
-const F = (globalThis.AIFLAGS ??= { exitCatch: true, zoneCamp: true, fixedMove: true, campDepth: 9, bumpLoop: true, loopWait: false, fireDepth: 1.2, autoReach: -1.5, bumpCost: 1.5 });
+// Behaviour switches and tunable numbers (bench/ searches over these). Each alliance's brain
+// takes a copy, so one side can run different values; F points at the copy of whichever brain
+// or bot is thinking right now.
+export const AI_DEFAULTS = {
+  exitCatch: true, zoneCamp: true, fixedMove: true, campDepth: 9, loopWait: false,
+  bumpLoop: true,     // 254-style BUMP loop for fixed shooters (beats the plain cycle head-to-head)
+  fireDepth: 1.2,     // fixed shooters fire this far inside the zone line (m)
+  autoReach: -1.5,    // AUTO sweeps up to here, alliance-local x (negative = past centre)
+  bumpCost: 1.5,      // extra metres charged for a BUMP lane by robots that fit the TRENCH
+  homeScore: 2, homeOther: 0.3,   // how much distance from home counts when picking FUEL
+  nbr: 0.5,           // weight of neighbouring cells in a cluster
+  mateMul: 0.4,       // cluster value when a teammate is already headed there
+  crossCost: 1.5,     // extra metres for a cluster across a HUB line
+  pickOverhead: 1.2,  // fixed seconds added to every pickup trip
+  wallMul: 0.55, cornerMul: 0.25, // value of FUEL against a wall / in a corner
+  retFull: 0.85,      // go home at this fraction of capacity
+  retSlack: 2.5,      // seconds of margin to fire the load before our HUB switches off
+  retLoad: 10, retFar: 2.5,       // go home with retLoad+ when nothing is within retFar m
+  autoFull: 0.8,      // AUTO: go home at this fraction of capacity
+  loopFull: 0.85, loopSlack: 2, loopFar: 3, loopFarLoad: 0.5, // BUMP-loop return rules
+  catchLoad: 1.2,     // exit-catch when holding at most this many seconds of fire
+  catchMin: 4,        // FUEL queued in our HUB before going to catch it
+  passKeep: 0.5,      // stockpilers keep this fraction of capacity and pass the rest
+  sweepPlan: true,    // elite bots plan straight runs through the FUEL (sweepLine)
+  planFixed: false, planRound: true, // ...also for fixed shooters / round chassis
+  roundWidth: 0.6,    // a round chassis shoves FUEL aside: credit runs with less of the intake
+  loopNearHub: true,  // BUMP loop scoops around our HUB before the rest of our half
+  cornerLoop: true,   // fixed shooters run the corner loop (below) instead of the BUMP loop
+  cornerDepth: 2.4, cornerZ: 2.9, // its firing spot: this far into our zone, this far off centre
+  cornerFull: 0.7,    // ...and the load it heads home with
+};
+globalThis.AIFLAGS ??= { ...AI_DEFAULTS };
+let F = globalThis.AIFLAGS;
 
 // Coarse count of loose FUEL on the carpet, shared by every bot and refreshed a few times a second.
 const CELL = 0.6;
@@ -52,7 +83,8 @@ export function power(r) {
 }
 
 export class TeamBrain {
-  constructor(world, alliance, tactic, skill) {
+  constructor(world, alliance, tactic, skill, params = null) {
+    this.P = { ...AI_DEFAULTS, ...globalThis.AIFLAGS, ...params };
     this.w = world;
     this.a = alliance;
     this.tactic = tactic;
@@ -70,7 +102,7 @@ export class TeamBrain {
   // them don't pile onto one BUMP: one per BUMP, a third at our far TRENCH exit (or squeezed
   // onto a BUMP when it can't fit the TRENCH). Re-dealt only when the set of loopers changes.
   laneFor(bot) {
-    const L = this.bots().filter((b) => b.r.fixedShooter && b.lvl >= 2 && F.bumpLoop);
+    const L = this.bots().filter((b) => b.r.fixedShooter && b.lvl >= 2 && (F.bumpLoop || F.cornerLoop));
     const key = L.map((b) => b.r.id).sort().join(',');
     if (key !== this.laneKey) {
       this.laneKey = key;
@@ -96,6 +128,7 @@ export class TeamBrain {
   opponents() { return this.w.robots.filter((r) => r.alliance !== this.a); }
 
   update(dt) {
+    F = this.P;
     this.timer -= dt;
     if (this.timer > 0) return;
     this.timer = 0.25;
@@ -224,10 +257,11 @@ export class Bot {
   setRole(role) {
     if (role === this.role) return;
     this.role = role;
-    this.homeWeight = role === 'score' ? 2 : 0.3;
+    this.homeWeight = role === 'score' ? F.homeScore : F.homeOther;
     this.catching = false;
     this.loop = null;
     this.sweepGoal = null;
+    this.run = null;
     this.ball = -1;
     this.retarget = 0;
     this.r.passTarget = null;
@@ -361,18 +395,18 @@ export class Bot {
         // Neighbouring cells count half: we sweep through a patch, not a single cell.
         for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
           const ax = cx + dx, az = cz + dz;
-          if (ax >= 0 && ax < NX && az >= 0 && az < NZ) n += fm.n[ax * NZ + az] * 0.5;
+          if (ax >= 0 && ax < NX && az >= 0 && az < NZ) n += fm.n[ax * NZ + az] * F.nbr;
         }
-        for (const mb of mates) if (Math.abs(mb.goalCell[0] - cx) <= 1 && Math.abs(mb.goalCell[1] - cz) <= 1) n *= 0.4;
+        for (const mb of mates) if (Math.abs(mb.goalCell[0] - cx) <= 1 && Math.abs(mb.goalCell[1] - cz) <= 1) n *= F.mateMul;
         let d = Math.hypot(x - r.x, z - r.z);
-        if ((Math.abs(r.x) - HUB_X) * (Math.abs(x) - HUB_X) < 0) d += 1.5;
+        if ((Math.abs(r.x) - HUB_X) * (Math.abs(x) - HUB_X) < 0) d += F.crossCost;
         if (bias) d += bias(x, z);
         const home = Math.max(0, s * (ZONE_X + 0.4) - s * x);
-        const time = Math.max(0, d) / v + home * homeWeight / v + 1.2;
+        const time = Math.max(0, d) / v + home * homeWeight / v + F.pickOverhead;
         let val = Math.min(n, r.p.capacity - r.fuel + 4) / time;
         // FUEL pinned against a wall or in a corner gets shoved along instead of picked up.
         const wallX = Math.abs(x) > HL - 0.5, wallZ = Math.abs(z) > HW - 0.4;
-        if (wallX && wallZ) val *= 0.25; else if (wallX || wallZ) val *= 0.55;
+        if (wallX && wallZ) val *= F.cornerMul; else if (wallX || wallZ) val *= F.wallMul;
         if (val > bv) { bv = val; best = [cx, cz, x, z]; }
       }
     }
@@ -442,9 +476,112 @@ export class Bot {
     return n ? [sx / n, sz / n] : null;
   }
 
+  sweep(cmd, dt, allow, bias) {
+    // Planned runs pay off for turret robots (a round one with a narrower credited intake, as it
+    // shoves FUEL aside); fixed shooters did worse with them in the benchmark.
+    if (F.sweepPlan && this.lvl >= 3 && (F.planFixed || !this.r.fixedShooter) && (F.planRound || !this.r.round)) {
+      const mv = this.sweepLine(cmd, dt, allow, bias);
+      if (mv) return mv;
+    }
+    return this.sweepCluster(cmd, dt, allow, bias);
+  }
+
+  // Elite bots plan a straight run through the FUEL instead: from a fan of lines out of where
+  // we are (plus lines aimed through the best clusters), take the one that picks up the most
+  // per second, then drive it flat out with the intake leading, the way a driver ploughs a pile.
+  sweepLine(cmd, dt, allow, bias) {
+    const r = this.r, m = this.w.match;
+    cmd.intake = true;
+    if (r.stats.intaked !== this.lastIntaked) { this.lastIntaked = r.stats.intaked; this.lastIntakeT = m.t; }
+    let run = this.run;
+    const stale = run && (Math.hypot(run.x1 - r.x, run.z1 - r.z) < 0.4 || m.t - run.t0 > run.T + 1.5
+      || (m.t - run.t0 > 1.2 && m.t - (this.lastIntakeT ?? 0) > 1.2));
+    if (stale) run = this.run = null;
+    this.runT = (this.runT ?? 0) - dt;
+    if (!run || this.runT <= 0) {
+      this.runT = 0.35 + this.skill.reaction;
+      const best = this.planRun(allow, bias);
+      // Stick with the current run unless a clearly better one turns up.
+      const cur = run ? this.rateRun(r.x, r.z, run.x1, run.z1, allow, bias) : null;
+      if (best && (!cur || best.val > cur.val * 1.3)) this.run = run = { ...best, t0: m.t };
+    }
+    if (!run) return null;
+    this.sweepGoal = [run.x1, run.z1];
+    cmd.heading = Math.atan2(-(run.z1 - r.z), run.x1 - r.x);
+    return this.goTo(run.x1, run.z1, { through: true });
+  }
+
+  planRun(allow, bias) {
+    const r = this.r, s = side(r.alliance);
+    const dirs = [];
+    for (let k = 0; k < 16; k++) dirs.push((k * Math.PI) / 8);
+    // Lines through the best few clusters, so a dense pile a little off the fan isn't missed.
+    const c = this.pickCluster(allow, bias, this.homeWeight ?? 0.5);
+    if (c) dirs.push(Math.atan2(-(c[3] - r.z), c[2] - r.x));
+    let best = null;
+    for (const a of dirs) {
+      const ux = Math.cos(a), uz = -Math.sin(a);
+      for (const L of [1.5, 3, 4.5]) {
+        let x1 = r.x + ux * L, z1 = r.z + uz * L;
+        const lim = r.p.halfL + 0.05;
+        x1 = Math.max(-HL + lim, Math.min(HL - lim, x1));
+        z1 = Math.max(-HW + lim, Math.min(HW - lim, z1));
+        if (!this.runClear(r.x, r.z, x1, z1)) continue;
+        const v = this.rateRun(r.x, r.z, x1, z1, allow, bias);
+        if (v && (!best || v.val > best.val)) best = v;
+      }
+    }
+    // Spread out: a run ending where a teammate's run ends is worth less.
+    if (best) for (const b of this.brain.bots()) {
+      if (b !== this && b.run && Math.hypot(b.run.x1 - best.x1, b.run.z1 - best.z1) < 1.0) best.val *= F.mateMul;
+    }
+    return best && best.n >= 2 ? best : null;
+  }
+
+  // FUEL a run would pick up (what lies in the intake's path), and the rate per second.
+  rateRun(x0, z0, x1, z1, allow, bias) {
+    const r = this.r, f = this.w.fuel, s = side(r.alliance);
+    const dx = x1 - x0, dz = z1 - z0, L = Math.hypot(dx, dz);
+    if (L < 0.3) return null;
+    const ux = dx / L, uz = dz / L, w = (r.p.intakeW + 0.06) * (r.round ? F.roundWidth : 1);
+    let n = 0;
+    f.query(Math.min(x0, x1) - w, Math.min(z0, z1) - w, Math.max(x0, x1) + w, Math.max(z0, z1) + w, (i) => {
+      if (!f.active[i] || f.py[i] > 0.25 || f.shooter[i] >= 0) return;
+      const rx = f.px[i] - x0, rz = f.pz[i] - z0;
+      const t = rx * ux + rz * uz;
+      if (t < 0.1 || t > L + r.p.halfL) return;
+      if (Math.abs(rx * uz - rz * ux) > w) return;
+      if (allow && !allow(f.px[i], f.pz[i])) return;
+      n++;
+    });
+    const v = r.p.maxSpeed * this.skill.speed;
+    const turn = Math.abs(wrap(Math.atan2(-uz, ux) - r.h)) / r.p.maxOmega;
+    const home = Math.max(0, s * (ZONE_X + 0.4) - s * x1);
+    let time = L / v + turn * 0.5 + 0.3 + home * (this.homeWeight ?? 0.5) / v;
+    if (bias) time += bias(x1, z1) / v;
+    const got = Math.min(n, r.p.capacity - r.fuel + 4);
+    return { x1, z1, n, T: L / v + turn, val: got / Math.max(0.2, time) };
+  }
+
+  // A straight run must stay on our side of any HUB line and miss solid field elements.
+  runClear(x0, z0, x1, z1) {
+    const r = this.r;
+    if ((Math.abs(x0) - HUB_X) * (Math.abs(x1) - HUB_X) < 0) return false;
+    const pad = r.p.halfW + 0.08;
+    for (let k = 1; k <= 4; k++) {
+      const x = x0 + ((x1 - x0) * k) / 4, z = z0 + ((z1 - z0) * k) / 4;
+      if (Math.abs(Math.abs(x) - HUB_X) < 0.6) return false;
+      for (const b of this.w.field.boxes) {
+        if (b.y0 >= r.p.height) continue;
+        if (Math.abs(x - b.x) < b.hx + pad && Math.abs(z - b.z) < b.hz + pad) return false;
+      }
+    }
+    return true;
+  }
+
   // Higher levels sweep: drive straight through the densest patch with the intake leading,
   // the way a human driver ploughs a pile, instead of chasing balls one at a time.
-  sweep(cmd, dt, allow, bias) {
+  sweepCluster(cmd, dt, allow, bias) {
     const r = this.r, m = this.w.match;
     this.retarget -= dt;
     if (r.stats.intaked !== this.lastIntaked) { this.lastIntaked = r.stats.intaked; this.lastIntakeT = m.t; }
@@ -526,13 +663,13 @@ export class Bot {
   timeToReturn() {
     const r = this.r, cap = r.p.capacity;
     if (this.lvl < 2) return r.fuel >= Math.min(cap * 0.6, 25);
-    if (r.fuel >= cap * 0.85) return true;
+    if (r.fuel >= cap * F.retFull) return true;
     const c = this.brain.ctx;
     // Make sure the load gets fired before our HUB switches off.
-    if (c.myOn && c.toggle !== null && c.toggle < this.travelToZone() + r.fuel / r.p.fireRate + 2.5) return r.fuel >= 5;
+    if (c.myOn && c.toggle !== null && c.toggle < this.travelToZone() + r.fuel / r.p.fireRate + F.retSlack) return r.fuel >= 5;
     // Nothing worth chasing nearby.
     const g = this.sweepGoal;
-    if (r.fuel >= 10 && (!g || Math.hypot(g[0] - r.x, g[1] - r.z) > 2.5)) return true;
+    if (r.fuel >= F.retLoad && (!g || Math.hypot(g[0] - r.x, g[1] - r.z) > F.retFar)) return true;
     return false;
   }
 
@@ -565,6 +702,7 @@ export class Bot {
   }
 
   update(dt) {
+    F = this.brain.P;
     const r = this.r, m = this.w.match;
     const cmd = { mx: 0, mz: 0, heading: null, intake: false, shoot: false, speedScale: this.skill.speed, spreadScale: this.skill.spread, boost: this.skill.boost ?? 1 };
     if (!m.enabled) return cmd;
@@ -633,7 +771,7 @@ export class Bot {
       const mv = this.collect(cmd, dt, own);
       if (mv) return mv;
     }
-    const goHome = r.fuel >= r.p.capacity * 0.8 || left < 5 + this.travelToZone() * 0.5;
+    const goHome = r.fuel >= r.p.capacity * F.autoFull || left < 5 + this.travelToZone() * 0.5;
     if (goHome && r.fuel > 0) {
       if (inOwn) { cmd.intake = true; return this.evade([0, 0, 0]); }
       const [sx, sz] = this.stageSpot();
@@ -691,22 +829,57 @@ export class Bot {
     }
     // scoop: FUEL knocked around near our HUB first, then anywhere on our half.
     if (F.loopWait && pending >= 4 && r.fuel < cap * 0.6) { this.loop = 'catch'; return this.bumpLoop(cmd, dt, inOwn); }
-    const mv = this.collect(cmd, dt, nearHub) || this.collect(cmd, dt, (x) => s * x > -0.6);
+    const mv = (F.loopNearHub && this.collect(cmd, dt, nearHub)) || this.collect(cmd, dt, (x) => s * x > -0.6);
     // Head back up once the load is worth the trip, our shift is running out, or the carpet is bare.
     const c = this.brain.ctx;
-    const hurry = c.myOn && c.toggle !== null && c.toggle < this.travelToZone() + r.fuel / r.p.fireRate + 2;
-    const far = this.sweepGoal && Math.hypot(this.sweepGoal[0] - r.x, this.sweepGoal[1] - r.z) > 3;
-    if (!mv || r.fuel >= cap * 0.85 || (hurry && r.fuel >= 5) || (far && r.fuel >= cap * 0.5)) {
+    const hurry = c.myOn && c.toggle !== null && c.toggle < this.travelToZone() + r.fuel / r.p.fireRate + F.loopSlack;
+    const far = this.sweepGoal && Math.hypot(this.sweepGoal[0] - r.x, this.sweepGoal[1] - r.z) > F.loopFar;
+    if (!mv || r.fuel >= cap * F.loopFull || (hurry && r.fuel >= 5) || (far && r.fuel >= cap * F.loopFarLoad)) {
       if (r.fuel >= 5) this.loop = 'fire';
       return mv || [0, 0, 0];
     }
     return mv;
   }
 
+  // Firing spot for the corner loop: deep in our zone off to one side, where nobody drives
+  // through. Each looper gets its own side (from the same deal as the BUMP loop's lanes).
+  cornerSpot() {
+    const s = side(this.r.alliance), lane = this.brain.laneFor(this);
+    const z = Math.abs(lane) > 2.5 ? s * 1.3 : Math.sign(lane) * F.cornerZ;
+    return [s * (ZONE_X + F.cornerDepth), z];
+  }
+
+  // How a human drives a 254-style robot (from the logged matches): fire standing still from
+  // deep in our zone, go out through the TRENCH, plough the neutral zone until well loaded,
+  // come back and fire again.
+  cornerLoop(cmd, dt, inOwn) {
+    const r = this.r, s = side(r.alliance), cap = r.p.capacity;
+    cmd.intake = true;
+    if (r.fuel === 0) this.loop = 'collect';
+    else if (!this.loop) this.loop = r.fuel >= 8 ? 'fire' : 'collect';
+    if (this.loop === 'fire') {
+      const [fx, fz] = this.cornerSpot();
+      const mv = this.goTo(fx, fz, { through: true });
+      const d = Math.hypot(fx - r.x, fz - r.z);
+      if (d < 0.35 && inOwn) { mv[0] = 0; mv[1] = 0; }
+      if (inOwn && d < 2.5) { cmd.heading = r.aimHeading(); cmd.headingGain = 8; }
+      cmd.shoot = inOwn && r.fuel > 0 && this.scoringOnArrival();
+      return mv;
+    }
+    const mv = this.collect(cmd, dt, (x) => s * x > -0.6);
+    const c = this.brain.ctx;
+    const hurry = c.myOn && c.toggle !== null && c.toggle < this.travelToZone() + 1.5 + r.fuel / r.p.fireRate + F.loopSlack;
+    const far = this.sweepGoal && Math.hypot(this.sweepGoal[0] - r.x, this.sweepGoal[1] - r.z) > F.loopFar;
+    if (r.fuel >= cap * F.cornerFull || (!mv && r.fuel >= 5) || (hurry && r.fuel >= 5) || (far && r.fuel >= cap * F.loopFarLoad)) this.loop = 'fire';
+    if (inZone(r.alliance, r.x) && r.fuel > 0) cmd.shoot = this.scoringOnArrival();
+    return mv || [0, 0, 0];
+  }
+
   doScore(cmd, dt, inOwn) {
     const r = this.r, s = side(r.alliance);
     const cap = r.p.capacity;
     cmd.intake = true;
+    if (r.fixedShooter && this.lvl >= 2 && F.cornerLoop) return this.cornerLoop(cmd, dt, inOwn);
     if (r.fixedShooter && this.lvl >= 2 && F.bumpLoop) return this.bumpLoop(cmd, dt, inOwn);
     if (inOwn && r.fuel > 0) {
       cmd.shoot = this.scoringOnArrival();
@@ -724,7 +897,7 @@ export class Bot {
       // the zone line so the next trip out is short.
       const depth = this.lvl >= 2 ? F.campDepth : 9;
       const zone = (x) => s * x > ZONE_X + 0.15 && s * x < ZONE_X + depth;
-      if (this.lvl >= 3 && F.exitCatch && r.fuel <= r.p.fireRate * 1.2 && !this.brain.bots().some((b) => b !== this && b.catching)) {
+      if (this.lvl >= 3 && F.exitCatch && r.fuel <= r.p.fireRate * F.catchLoad && !this.brain.bots().some((b) => b !== this && b.catching)) {
         const lane = (r.z >= 0 ? 1 : -1) * 1.65;
         return this.evade(this.goTo(s * (ZONE_X + 0.45), lane, { through: true }));
       }
@@ -752,7 +925,7 @@ export class Bot {
       f.query(cx - 1.2, cz - 1.2, cx + 1.2, cz + 1.2, (i) => { if (f.py[i] < 0.25 && f.shooter[i] < 0) loose++; });
       const mate = this.brain.bots().some((b) => b !== this && b.catching);
       const near = Math.hypot(cx - r.x, cz - r.z);
-      const go = wasCatching ? pending > 0 : pending >= 4;
+      const go = wasCatching ? pending > 0 : pending >= F.catchMin;
       if (!mate && go) {
         this.catching = true;
         cmd.intake = true;
@@ -796,7 +969,7 @@ export class Bot {
     // non-stop once the HUB is live. Stop passing in time to arrive full.
     const c = this.brain.ctx;
     const fillTime = (r.p.capacity - r.fuel) / 8 + this.travelToZone() + 3;
-    const passAt = c.toggle !== null && c.toggle > fillTime ? 0.5 : 1.01;
+    const passAt = c.toggle !== null && c.toggle > fillTime ? F.passKeep : 1.01;
     if (r.fuel >= r.p.capacity * passAt && !inOwn && this.lvl >= 3 && !r.fixedShooter) {
       r.passTarget = this.feedTarget();
       cmd.shoot = true;
@@ -819,8 +992,8 @@ export class Bot {
     const r = this.r;
     cmd.intake = true;
     // Fixed shooters wait on their firing spot so the first shot of the shift is already lined up.
-    const [sx, sz] = r.fixedShooter && this.lvl >= 2 && F.bumpLoop
-      ? [side(r.alliance) * (ZONE_X + F.fireDepth), this.brain.laneFor(this)] : this.stageSpot();
+    const [sx, sz] = r.fixedShooter && this.lvl >= 2 && F.cornerLoop ? this.cornerSpot()
+      : r.fixedShooter && this.lvl >= 2 && F.bumpLoop ? [side(r.alliance) * (ZONE_X + F.fireDepth), this.brain.laneFor(this)] : this.stageSpot();
     const mv = this.goTo(sx, sz);
     if (mv[2] < 0.5 && inOwn) { mv[0] = 0; mv[1] = 0; }
     cmd.shoot = inOwn && r.fuel > 0 && this.scoringOnArrival();

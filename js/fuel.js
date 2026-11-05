@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from './three.js';
 import { HL, HW, G, BALL_R, HUB_TOP, HUB_OPEN_R, HUB_HALF, groundHeight, side, COLORS } from './config.js';
 
 const CELL = BALL_R * 2;
