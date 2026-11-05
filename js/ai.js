@@ -65,6 +65,33 @@ export class TeamBrain {
   }
 
   bots() { return this.w.bots.filter((b) => b.r.alliance === this.a); }
+
+  // Fixed shooters running the BUMP loop each get their own firing spot, so two or three of
+  // them don't pile onto one BUMP: one per BUMP, a third at our far TRENCH exit (or squeezed
+  // onto a BUMP when it can't fit the TRENCH). Re-dealt only when the set of loopers changes.
+  laneFor(bot) {
+    const L = this.bots().filter((b) => b.r.fixedShooter && b.lvl >= 2 && F.bumpLoop);
+    const key = L.map((b) => b.r.id).sort().join(',');
+    if (key !== this.laneKey) {
+      this.laneKey = key;
+      this.lanes = new Map();
+      const s = side(this.a);
+      let spots = [[-1.65], [-1.65, 1.65], [-1.65, 1.65, s * 3.37]][Math.min(L.length, 3) - 1] || [];
+      if (L.length === 1) spots = [(L[0].r.z >= 0 ? 1 : -1) * 1.65];
+      if (L.length >= 3 && !L.every((b) => b.r.p.fitsTrench)) spots = [-s * 1.65, s * 1.1, s * 2.25];
+      spots.sort((x, y) => x - y);
+      // Hand out spots across the field in the order the robots stand.
+      [...L].sort((x, y) => x.r.z - y.r.z).forEach((b, i) => this.lanes.set(b, spots[Math.min(i, spots.length - 1)]));
+      this.laneList = [...this.lanes.values()];
+    }
+    return this.lanes.get(bot) ?? (bot.r.z >= 0 ? 1 : -1) * 1.65;
+  }
+
+  // The looper whose firing spot is closest to z owns FUEL scattered there.
+  laneOwns(bot, z) {
+    const mine = this.laneFor(bot);
+    return this.laneList.every((l) => Math.abs(z - mine) <= Math.abs(z - l));
+  }
   members() { return this.w.robots.filter((r) => r.alliance === this.a); }
   opponents() { return this.w.robots.filter((r) => r.alliance !== this.a); }
 
@@ -624,12 +651,12 @@ export class Bot {
     const r = this.r, s = side(r.alliance), f = this.w.fuel, m = this.w.match, a = r.alliance;
     const cap = r.p.capacity;
     const hub = this.w.field.hubs[a];
-    if (this.loopLane === undefined) this.loopLane = (r.z >= 0 ? 1 : -1) * 1.65;
+    this.loopLane = this.brain.laneFor(this);
     const fireX = s * (ZONE_X + 0.14), fireZ = this.loopLane;
     const catchX = hub.x - s * (HUB_HALF + 0.42 + r.p.halfL), catchZ = 0;
     const pending = f.hubQueue.reduce((n, q) => n + (q.alliance === a), 0);
     const nose = s > 0 ? 0 : Math.PI;
-    const nearHub = (x, z) => Math.abs(x - catchX) < 1.8 && Math.abs(z) < 2.4 && s * x < s * hub.x - HUB_HALF;
+    const nearHub = (x, z) => Math.abs(x - catchX) < 1.8 && Math.abs(z) < 2.4 && s * x < s * hub.x - HUB_HALF && this.brain.laneOwns(this, z);
     cmd.intake = true;
     this.catching = this.loop === 'catch' || this.loop === 'scoop';
 
@@ -788,7 +815,7 @@ export class Bot {
     cmd.intake = true;
     // Fixed shooters wait on the BUMP crest so the first shot of the shift is already lined up.
     const [sx, sz] = r.fixedShooter && this.lvl >= 2 && F.bumpLoop
-      ? [side(r.alliance) * (ZONE_X + 0.14), (this.loopLane ?? (r.z >= 0 ? 1 : -1) * 1.65)] : this.stageSpot();
+      ? [side(r.alliance) * (ZONE_X + 0.14), this.brain.laneFor(this)] : this.stageSpot();
     const mv = this.goTo(sx, sz);
     if (mv[2] < 0.5 && inOwn) { mv[0] = 0; mv[1] = 0; }
     cmd.shoot = inOwn && r.fuel > 0 && this.scoringOnArrival();

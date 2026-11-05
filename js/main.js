@@ -8,13 +8,14 @@ import { Robot } from './robot.js';
 import { Match } from './match.js';
 import { Bot, TeamBrain, TACTICS, ROLE_LABEL } from './ai.js';
 import { Input } from './input.js';
+import { MatchLog, robotName } from './log.js';
 
 const $ = (id) => document.getElementById(id);
 const STEP = 1 / 120;
 
 // ---------- Settings ----------
 const isTouchDevice = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0 && !matchMedia('(pointer: fine)').matches;
-const DEFAULTS = { mode: 'match', alliance: 'blue', preset: 'balanced', allySkill: 'hard', oppSkill: 'einstein', allyTactic: 'balanced', oppTactic: 'random', camera: 'driver', control: 'auto', allyBots: ['random', 'random'], oppBots: ['random', 'random', 'random'], autoIntake: true, autoShoot: isTouchDevice, team: 9999, shadows: !isTouchDevice, showRoles: true };
+const DEFAULTS = { mode: 'match', alliance: 'blue', preset: 'balanced', allySkill: 'hard', oppSkill: 'einstein', allyTactic: 'balanced', oppTactic: 'random', camera: 'driver', control: 'auto', allyBots: ['random', 'random'], oppBots: ['random', 'random', 'random'], autoIntake: true, autoShoot: isTouchDevice, logMode: false, team: 9999, shadows: !isTouchDevice, showRoles: true };
 let settings = { ...DEFAULTS };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('simbotics.settings') || '{}')); } catch { /* storage unavailable */ }
 const saveSettings = () => { try { localStorage.setItem('simbotics.settings', JSON.stringify(settings)); } catch { /* ignore */ } };
@@ -137,6 +138,7 @@ function newWorld() {
   }
 
   world = { match, robots, fuel, field, towers: field.towers, bots: [], player, lastSeg: null, toastQ: [], brains: {} };
+  world.log = settings.logMode && mode !== 'practice' ? new MatchLog(world, settings) : null;
   // One strategy brain per alliance; teammates and opponents can use different levels and tactics.
   const keys = Object.keys(TACTICS);
   for (const a of ['red', 'blue']) {
@@ -247,6 +249,7 @@ function step(dt) {
   }, match.t);
   for (const r of robots) r.interactFuel(fuel, dt);
   feedOutposts(dt);
+  if (world.log) world.log.step(dt);
 }
 
 // ---------- Camera ----------
@@ -394,7 +397,7 @@ function robotTable() {
   const body = rows.map((r) => {
     const st = r.stats;
     const acc = st.shots ? `${Math.round((st.scored / st.shots) * 100)}%` : '—';
-    const name = r.p.name.startsWith(String(r.number)) ? r.p.name.slice(String(r.number).length).trim() : r.p.name;
+    const name = robotName(r);
     return `<tr class="${r.alliance === 'red' ? 'ar' : 'ab'}${r.isPlayer ? ' me' : ''}">
       <td><b>${r.number}</b> <small>${name}</small>${r.isPlayer ? ' <small class="who">你</small>' : ''}</td>
       <td>${st.scored}</td><td>${st.shots}</td><td>${acc}</td><td>${st.passes}</td><td>${st.intaked}</td><td>${r.climbLevel ? 'L' + r.climbLevel : '—'}</td></tr>`;
@@ -425,7 +428,25 @@ function showResults() {
       ${row('Ranking Points', rpTxt)}
     </table>
     ${robotTable()}
+    ${world.log ? `<div class="log"><div class="log-bar"><b>操作記錄</b><button id="btn-log-copy">複製</button><button id="btn-log-save">下載 .txt</button></div><textarea id="log-text" readonly></textarea></div>` : ''}
     <p class="hint">RP：E = Energized（≥100 FUEL）、S = Supercharged（≥360 FUEL）、T = Traversal（TOWER ≥50 分）<br>命中率 = 進球 ÷ 射向 HUB 的球；在己方區域外射出的球算傳球。</p>`;
+  if (world.log) {
+    const text = world.log.text();
+    $('log-text').value = text;
+    $('btn-log-copy').onclick = async () => {
+      const btn = $('btn-log-copy');
+      try { await navigator.clipboard.writeText(text); } catch { $('log-text').select(); document.execCommand('copy'); }
+      btn.textContent = '已複製';
+      setTimeout(() => { btn.textContent = '複製'; }, 1500);
+    };
+    $('btn-log-save').onclick = () => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+      a.download = `simbotics-log-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '')}.txt`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    };
+  }
   $('results').hidden = false;
 }
 
@@ -465,6 +486,8 @@ function fillMenu() {
   $('opt-intake').onchange = () => { settings.autoIntake = $('opt-intake').checked; saveSettings(); };
   $('opt-shoot').checked = settings.autoShoot;
   $('opt-shoot').onchange = () => { settings.autoShoot = $('opt-shoot').checked; saveSettings(); };
+  $('opt-log').checked = settings.logMode;
+  $('opt-log').onchange = () => { settings.logMode = $('opt-log').checked; saveSettings(); };
   $('opt-roles').checked = settings.showRoles;
   $('opt-roles').onchange = () => { settings.showRoles = $('opt-roles').checked; saveSettings(); };
   $('opt-shadows').checked = settings.shadows;
