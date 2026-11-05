@@ -14,7 +14,7 @@ const STEP = 1 / 120;
 
 // ---------- Settings ----------
 const isTouchDevice = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0 && !matchMedia('(pointer: fine)').matches;
-const DEFAULTS = { mode: 'match', alliance: 'blue', preset: 'balanced', allySkill: 'hard', oppSkill: 'einstein', allyTactic: 'balanced', oppTactic: 'random', camera: 'driver', control: 'auto', autoIntake: true, autoShoot: isTouchDevice, team: 9999, shadows: !isTouchDevice, showRoles: true };
+const DEFAULTS = { mode: 'match', alliance: 'blue', preset: 'balanced', allySkill: 'hard', oppSkill: 'einstein', allyTactic: 'balanced', oppTactic: 'random', camera: 'driver', control: 'auto', allyBots: ['random', 'random'], oppBots: ['random', 'random', 'random'], autoIntake: true, autoShoot: isTouchDevice, team: 9999, shadows: !isTouchDevice, showRoles: true };
 let settings = { ...DEFAULTS };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('simbotics.settings') || '{}')); } catch { /* storage unavailable */ }
 const saveSettings = () => { try { localStorage.setItem('simbotics.settings', JSON.stringify(settings)); } catch { /* ignore */ } };
@@ -91,12 +91,14 @@ function newWorld() {
   used.add(player.number);
   robots.push(player);
   if (mode === 'match') {
-    // Bots drive the real 2026 robots (shuffled), topped up with generic ones.
-    const real = Object.keys(ROBOT_PRESETS).filter((k) => ROBOT_PRESETS[k].real && k !== settings.preset);
+    // Picked robots first; "random" slots get the real 2026 robots nobody took (shuffled),
+    // topped up with generic ones.
+    const picks = [...settings.allyBots, ...settings.oppBots];
+    const real = Object.keys(ROBOT_PRESETS).filter((k) => ROBOT_PRESETS[k].real && k !== settings.preset && !picks.includes(k));
     for (let i = real.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [real[i], real[j]] = [real[j], real[i]]; }
-    const kinds = [...real, 'balanced', 'shuttle', 'hopper'];
+    const pool = [...real, 'balanced', 'shuttle', 'hopper'];
     for (let i = 0; i < 5; i++) {
-      const pr = ROBOT_PRESETS[kinds[i]];
+      const pr = ROBOT_PRESETS[ROBOT_PRESETS[picks[i]] ? picks[i] : pool.shift()];
       const num = pr.team && !used.has(pr.team) ? pr.team : randomTeam(used);
       used.add(num);
       robots.push(new Robot(robots.length, i < 2 ? me : other(me), num, pr, false));
@@ -385,6 +387,22 @@ function handleEvents() {
   }
 }
 
+// Per-robot breakdown, our alliance first, best scorer on top.
+function robotTable() {
+  const me = world.player;
+  const rows = [...world.robots].sort((x, y) => (x.alliance === me.alliance ? 0 : 1) - (y.alliance === me.alliance ? 0 : 1) || y.stats.scored - x.stats.scored);
+  const body = rows.map((r) => {
+    const st = r.stats;
+    const acc = st.shots ? `${Math.round((st.scored / st.shots) * 100)}%` : '—';
+    const name = r.p.name.startsWith(String(r.number)) ? r.p.name.slice(String(r.number).length).trim() : r.p.name;
+    return `<tr class="${r.alliance === 'red' ? 'ar' : 'ab'}${r.isPlayer ? ' me' : ''}">
+      <td><b>${r.number}</b> <small>${name}</small>${r.isPlayer ? ' <small class="who">你</small>' : ''}</td>
+      <td>${st.scored}</td><td>${st.shots}</td><td>${acc}</td><td>${st.passes}</td><td>${st.intaked}</td><td>${r.climbLevel ? 'L' + r.climbLevel : '—'}</td></tr>`;
+  }).join('');
+  return `<div class="robots"><table>
+    <tr><th>機器人</th><th>進球</th><th>射出</th><th>命中</th><th>傳球</th><th>吸入</th><th>TOWER</th></tr>${body}</table></div>`;
+}
+
 function showResults() {
   const m = world.match;
   const row = (label, fn) => `<tr><td>${label}</td><td class="r">${fn('red')}</td><td class="b">${fn('blue')}</td></tr>`;
@@ -395,7 +413,6 @@ function showResults() {
   };
   const r = m.total('red'), b = m.total('blue');
   const winner = r > b ? '紅聯盟獲勝' : b > r ? '藍聯盟獲勝' : '平手';
-  const me = world.player;
   $('results-body').innerHTML = `
     <h2 class="${r > b ? 'r' : b > r ? 'b' : ''}">${winner}</h2>
     <table>
@@ -407,8 +424,8 @@ function showResults() {
       <tr class="total"><td>總分</td><td class="r">${r}</td><td class="b">${b}</td></tr>
       ${row('Ranking Points', rpTxt)}
     </table>
-    <p class="mine">你（${me.number}）：得分 ${me.stats.scored} 顆 FUEL · 射出 ${me.stats.shots} 顆 · 吸入 ${me.stats.intaked} 顆</p>
-    <p class="hint">RP：E = Energized（≥100 FUEL）、S = Supercharged（≥360 FUEL）、T = Traversal（TOWER ≥50 分）</p>`;
+    ${robotTable()}
+    <p class="hint">RP：E = Energized（≥100 FUEL）、S = Supercharged（≥360 FUEL）、T = Traversal（TOWER ≥50 分）<br>命中率 = 進球 ÷ 射向 HUB 的球；在己方區域外射出的球算傳球。</p>`;
   $('results').hidden = false;
 }
 
@@ -429,6 +446,18 @@ function fillMenu() {
     const el = $(id);
     el.value = settings[key];
     el.onchange = () => { settings[key] = el.value; saveSettings(); describe(); };
+  }
+  // Teammate / opponent robot pickers.
+  const pickOpts = `<option value="random">隨機</option><optgroup label="2026 真實機器人">${opts(true)}</optgroup><optgroup label="通用">${opts(false)}</optgroup>`;
+  for (const [key, n] of [['allyBots', 2], ['oppBots', 3]]) {
+    settings[key] = [...(Array.isArray(settings[key]) && settings[key].length === n ? settings[key] : DEFAULTS[key])];
+    for (let i = 0; i < n; i++) {
+      const el = $(`opt-bot-${key === 'allyBots' ? 'ally' : 'opp'}-${i}`);
+      el.innerHTML = pickOpts;
+      if (!ROBOT_PRESETS[settings[key][i]]) settings[key][i] = 'random';
+      el.value = settings[key][i];
+      el.onchange = () => { settings[key][i] = el.value; saveSettings(); };
+    }
   }
   $('opt-team').value = settings.team;
   $('opt-team').onchange = () => { settings.team = Math.max(1, Math.min(99999, parseInt($('opt-team').value, 10) || 9999)); $('opt-team').value = settings.team; saveSettings(); };

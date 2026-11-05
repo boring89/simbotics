@@ -8,7 +8,7 @@ FRC 2026 賽季遊戲 **REBUILT** 的 3D 操駕模擬器，純靜態網頁（Thr
 - 比賽流程：0:20 AUTO → 2:20 TELEOP（Transition、Shift 1–4 HUB 輪流啟用、Endgame）
 - 計分：FUEL、TOWER（AUTO L1 15 分；結束時 L1/L2/L3 = 10/20/30），以及 Energized / Supercharged / Traversal RP
 - 3v3 對戰（2 台電腦隊友 + 3 台電腦對手）、單人計時、自由練習；隊友與對手可分別設定 AI 難度（簡單／普通／困難／愛因斯坦／傳奇）與戰術
-- 2026 真實機器人：254 Overload、1690 Kepler、4946 The Alpha Dogs（圓形底盤）、118 Artemis（雙砲塔）、4414 RIPCURRENT，各自有依照照片還原的 3D 模型與參數；3v3 時電腦也會開這些機器人
+- 2026 真實機器人：254 Overload、1690 Kepler、4946 The Alpha Dogs（圓形底盤）、118 Artemis（雙砲塔）、4414 RIPCURRENT，各自有依照照片還原的 3D 模型與參數；3v3 時可在選單逐台指定隊友與對手開哪台機器人，選「隨機」則從還沒被選的真實機器人中抽
 - 另有三台通用機器人：Balanced Swerve、Speedy Shuttle、Heavy Hopper（太高，不能鑽 TRENCH）
 - 固定式射手（254）按住射擊會自動轉車頭瞄準（依剎車距離控制角速度，不會左右晃），沿炮管實際方向發射；雙砲塔（118）兩邊輪流射
 - 砲塔自動瞄準並補償車速；離開 Alliance Zone 時改成把 FUEL 傳回己方區域
@@ -87,7 +87,7 @@ python3 -m http.server 8080
 | 防守 | 守住對手回家要走的 BUMP／TRENCH 通道，近距離卡位（不進對手 Alliance Zone）；沒目標時就清掉中場的球 |
 | 反防守 | 把頂住隊友的防守機推開 |
 | 搶球 | 進對手區域把他們囤的球吸走再傳回自己區域（斷糧） |
-| 攀爬 | 困難以上只派最弱的一台爬，其他人打到最後一秒 |
+| 攀爬 | 困難以上每台在該出發的時間點比較：爬上去的分數（轉塔車路上還能把球射完）vs. 留下來還能射進的球（車上的球 + 依自己整場進球速度再跑一輪），划算才去爬 |
 
 AUTO：先射完預載、只在己方半場掃球（依 Team Update 22 不越過中線），最弱的一台拿 DEPOT 後爬 L1。
 

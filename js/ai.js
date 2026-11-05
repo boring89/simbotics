@@ -1,4 +1,4 @@
-import { HL, HW, HUB_X, HUB_HALF, ZONE_X, LANES, TRENCH, TRENCH_LANES, side, other } from './config.js';
+import { HL, HW, HUB_X, HUB_HALF, ZONE_X, LANES, TRENCH, TRENCH_LANES, SCORE, side, other } from './config.js';
 import { inZone } from './field.js';
 
 // Alliance strategy, modelled on what top 2026 alliances did:
@@ -162,7 +162,7 @@ export class TeamBrain {
     }
 
     if (lvl === 0) for (const b of bots) roles.set(b, 'simple');
-    for (const b of bots) if (b.wantsClimb(c, sorted)) roles.set(b, 'climb');
+    for (const b of bots) if (b.wantsClimb(c)) roles.set(b, 'climb');
     for (const [b, role] of roles) b.setRole(role);
   }
 }
@@ -218,16 +218,26 @@ export class Bot {
     return d / (r.p.maxSpeed * this.skill.speed * 0.8);
   }
 
-  wantsClimb(ctx, sorted) {
+  wantsClimb(ctx) {
     const r = this.r, m = this.w.match;
     if (m.mode !== 'match' || this.climbGoal <= 0) return false;
-    if (r.climbing && this.role === 'climb') return true;
-    // Elite alliances keep scoring; only the weakest scorer climbs.
-    if (this.lvl >= 2 && sorted[0] !== this) return false;
+    // Once committed, stay committed (travel time shrinks as we close in).
+    if (this.role === 'climb' && ctx.endgame) return true;
     const tower = this.w.towers[r.alliance];
     const climbTime = (tower.rungs[this.climbGoal - 1] - 0.48) / r.p.climbRate;
     const travel = Math.hypot(tower.climbX - r.x, tower.z - r.z) / (r.p.maxSpeed * this.skill.speed) + 2;
-    return ctx.remaining < climbTime + travel + (this.lvl >= 2 ? 0.5 : 2);
+    const leave = climbTime + travel + (this.lvl >= 2 ? 1.0 : 2);
+    if (ctx.remaining >= leave) return false;
+    if (this.lvl < 2) return true;
+    // Decide around the moment we'd have to leave; any later and we'd hang too late to count.
+    if (ctx.remaining < leave - 1.5) return false;
+    // Elite bots compare the climb with what they'd still score down here in the time left:
+    // the load they carry, plus whatever another collect cycle (~4 s) would add at their
+    // match rate (both HUBs are live in endgame). Turrets keep firing on the way to the TOWER.
+    const rate = r.stats.scored / Math.max(30, m.t - m.countdownEnd) * 1.4;
+    const stay = r.fuel + rate * Math.max(0, ctx.remaining - 4);
+    const climb = SCORE.levels[this.climbGoal] + (r.fixedShooter ? 0 : r.fuel);
+    return climb >= stay;
   }
 
   // Waypoints that cross HUB lines only through BUMP or TRENCH lanes.
