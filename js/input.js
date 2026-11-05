@@ -1,4 +1,6 @@
-// Keyboard + gamepad. Edge-triggered actions are exposed through pressed().
+import { TouchControls } from './touch.js';
+
+// Keyboard + gamepad + touch. Edge-triggered actions are exposed through pressed().
 export class Input {
   constructor() {
     this.keys = new Set();
@@ -17,6 +19,7 @@ export class Input {
     canvas.addEventListener('mousedown', (e) => { if (e.button === 0) this.mouse = true; });
     addEventListener('mouseup', (e) => { if (e.button === 0) this.mouse = false; });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    this.touch = new TouchControls(this.edges);
   }
 
   pad() {
@@ -33,6 +36,12 @@ export class Input {
     let rot = (k('KeyJ') || k('ArrowLeft') ? 1 : 0) - (k('KeyL') || k('ArrowRight') ? 1 : 0);
     let shoot = k('Space') || this.mouse;
     let intake = k('ShiftLeft') || k('ShiftRight') || k('KeyK');
+    let aim = null;
+
+    const t = this.touch.read();
+    if (t.fx || t.fy) { fx = t.fx; fy = t.fy; }
+    if (t.aim) aim = t.aim;
+    if (t.shoot) shoot = true;
 
     const p = this.pad();
     const padEdges = new Set();
@@ -52,7 +61,7 @@ export class Input {
       }
     }
     for (const e of padEdges) this.edges.add(e);
-    return { fx, fy, rot, shoot, intake };
+    return { fx, fy, rot, aim, shoot, intake };
   }
 
   pressed(code) {
@@ -60,5 +69,5 @@ export class Input {
     return false;
   }
 
-  clearEdges() { this.edges.clear(); }
+  clearEdges() { this.edges.clear(); this.touch.reset(); }
 }

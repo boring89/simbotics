@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import {
   HL, ZONE_X, DEPOT, STAGE, ROBOT_PRESETS, BOT_SKILL, COLORS, side, other,
 } from './config.js';
-import { buildField } from './field.js';
+import { buildField, inZone } from './field.js';
 import { Fuel } from './fuel.js';
 import { Robot } from './robot.js';
 import { Match } from './match.js';
@@ -13,15 +13,17 @@ const $ = (id) => document.getElementById(id);
 const STEP = 1 / 120;
 
 // ---------- Settings ----------
-const DEFAULTS = { mode: 'match', alliance: 'blue', preset: 'balanced', allySkill: 'hard', oppSkill: 'einstein', allyTactic: 'balanced', oppTactic: 'random', camera: 'driver', autoIntake: true, team: 9999, shadows: true, showRoles: true };
+const isTouchDevice = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0 && !matchMedia('(pointer: fine)').matches;
+const DEFAULTS = { mode: 'match', alliance: 'blue', preset: 'balanced', allySkill: 'hard', oppSkill: 'einstein', allyTactic: 'balanced', oppTactic: 'random', camera: 'driver', control: 'auto', autoIntake: true, autoShoot: isTouchDevice, team: 9999, shadows: !isTouchDevice, showRoles: true };
 let settings = { ...DEFAULTS };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('simbotics.settings') || '{}')); } catch { /* storage unavailable */ }
 const saveSettings = () => { try { localStorage.setItem('simbotics.settings', JSON.stringify(settings)); } catch { /* ignore */ } };
+const touchMode = () => settings.control === 'touch' || (settings.control === 'auto' && isTouchDevice);
 
 // ---------- Renderer / scene ----------
 const canvas = $('view');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio, isTouchDevice ? 1.5 : 2));
 renderer.shadowMap.enabled = settings.shadows;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -53,6 +55,8 @@ function resize() {
   const w = innerWidth, h = innerHeight;
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
+  // Keep roughly the landscape field of view across the screen when held upright.
+  camera.fov = w >= h ? 60 : Math.min(88, (2 * Math.atan(Math.tan(Math.PI / 6) * 1.25 / camera.aspect) * 180) / Math.PI);
   camera.updateProjectionMatrix();
 }
 addEventListener('resize', resize);
@@ -181,7 +185,16 @@ function feedOutposts(dt) {
   }
 }
 
-let frameInput = { fx: 0, fy: 0, rot: 0, shoot: false, intake: false };
+let frameInput = { fx: 0, fy: 0, rot: 0, aim: null, shoot: false, intake: false };
+
+// Auto-shoot: fire whenever we're in our zone with FUEL and the shot will land in an active HUB.
+function autoShootNow(p) {
+  const m = world.match;
+  if (p.fuel <= 0 || p.climbing || !inZone(p.alliance, p.x)) return false;
+  if (m.mode === 'practice') return true;
+  const t = m.t + (p.turrets[0]?.shot?.T ?? 1) + 0.05;
+  return m.hubActiveAt(p.alliance, t) || m.hubActiveAt(p.alliance, t - 2.6);
+}
 
 function controlFrame() {
   // Ground-plane "forward" for the current camera.
@@ -204,11 +217,18 @@ function step(dt) {
     mx: fx * inp.fx + -fz * inp.fy,
     mz: fz * inp.fx + fx * inp.fy,
     rot: inp.rot,
-    shoot: inp.shoot,
-    intake: inp.intake || settings.autoIntake,
+    shoot: inp.shoot || (settings.autoShoot && autoShootNow(world.player)),
+    intake: inp.intake || settings.autoIntake || touchMode(),
   };
-  // Fixed shooters: holding shoot turns the chassis onto the target unless you're steering.
-  if (inp.shoot && world.player.fixedShooter && Math.abs(inp.rot) < 0.1 && world.player.fuel > 0) { pcmd.heading = world.player.aimHeading(); pcmd.headingGain = 8; }
+  if (inp.aim) {
+    // Aim stick: point the nose where the stick points, in the camera's ground frame.
+    const dx = fx * -inp.aim[1] + -fz * inp.aim[0], dz = fz * -inp.aim[1] + fx * inp.aim[0];
+    pcmd.heading = Math.atan2(-dz, dx);
+    pcmd.headingGain = 4;
+  } else if (pcmd.shoot && world.player.fixedShooter && Math.abs(inp.rot) < 0.1 && world.player.fuel > 0) {
+    // Fixed shooters: shooting turns the chassis onto the target unless you're steering.
+    pcmd.heading = world.player.aimHeading(); pcmd.headingGain = 8;
+  }
   world.player.update(dt, pcmd, world, enabled);
   for (const a in world.brains) world.brains[a].update(dt);
   for (const b of world.bots) b.r.update(dt, b.update(dt), world, enabled);
@@ -234,7 +254,12 @@ function updateCamera(dt) {
   const k = camState.init ? Math.min(1, dt * 5) : 1;
   const pos = new THREE.Vector3(), look = new THREE.Vector3();
   camera.up.set(0, 1, 0);
-  if (camMode === 'driver') {
+  const tall = camera.aspect < 1;
+  if (camMode === 'driver' && tall) {
+    // Upright phone: stand higher and centred so the whole field width stays in view.
+    pos.set(s * (HL + 1.2), 7.8, -s * 0.3);
+    look.set(r.x * 0.55 - s * 2.6, 0, r.z * 0.35);
+  } else if (camMode === 'driver') {
     pos.set(s * (HL + 2.0), 3.0, -s * 1.8);
     look.set(r.x * 0.5 - s * 2.0, 0, r.z * 0.5 - s * 0.6);
   } else if (camMode === 'chase') {
@@ -248,6 +273,11 @@ function updateCamera(dt) {
   } else if (camMode === 'debug') {
     pos.copy(camState.dbgPos);
     look.copy(camState.dbgLook);
+  } else if (tall) {
+    // Upright phone: top-down with our wall at the bottom of the screen.
+    camera.up.set(-s, 0, 0);
+    pos.set(r.x * 0.25 + s * 0.6, 19, 0.001);
+    look.set(r.x * 0.25, 0, 0);
   } else {
     pos.set(r.x * 0.3, 11.5, 9.8);
     look.set(r.x * 0.3, 0, 0.6);
@@ -314,9 +344,15 @@ function updateHud() {
   setText('aim-state', player.aimMode === 'hub' ? '瞄準 HUB' : '傳球模式');
   setClass('aim-state', 'pass', player.aimMode !== 'hub');
 
+  const touch = touchMode();
+  const canClimb = player.inClimbZone(world) && match.enabled;
+  if (touch) {
+    $('t-climb').hidden = !(player.climbing || canClimb);
+    $('t-down').hidden = !player.climbing;
+  }
   let prompt = '';
-  if (player.climbing) prompt = `TOWER 上 — ${player.climbLevel ? 'L' + player.climbLevel : '攀爬中…'}   [C] 往上  [X] 往下`;
-  else if (player.inClimbZone(world) && match.enabled) prompt = '[C] 攀爬 TOWER';
+  if (player.climbing) prompt = `TOWER 上 — ${player.climbLevel ? 'L' + player.climbLevel : '攀爬中…'}${touch ? '' : '   [C] 往上  [X] 往下'}`;
+  else if (canClimb) prompt = touch ? '可以攀爬 TOWER' : '[C] 攀爬 TOWER';
   else if (player.aimMode === 'pass' && player.fuel > 0) prompt = '不在己方區域 — 射擊會變成傳球';
   else if (match.enabled && !match.hubActive(player.alliance) && player.fuel > 0) prompt = '己方 HUB 停用中 — 先囤積 FUEL';
   setText('prompt', prompt);
@@ -388,7 +424,7 @@ function fillMenu() {
   const tacOpts = Object.entries(TACTICS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
   $('opt-ally-tactic').innerHTML = tacOpts;
   $('opt-opp-tactic').innerHTML = `<option value="random">隨機</option>${tacOpts}`;
-  for (const [id, key] of [['opt-mode', 'mode'], ['opt-alliance', 'alliance'], ['opt-preset', 'preset'], ['opt-ally-skill', 'allySkill'], ['opt-opp-skill', 'oppSkill'], ['opt-ally-tactic', 'allyTactic'], ['opt-opp-tactic', 'oppTactic'], ['opt-camera', 'camera']]) {
+  for (const [id, key] of [['opt-control', 'control'], ['opt-mode', 'mode'], ['opt-alliance', 'alliance'], ['opt-preset', 'preset'], ['opt-ally-skill', 'allySkill'], ['opt-opp-skill', 'oppSkill'], ['opt-ally-tactic', 'allyTactic'], ['opt-opp-tactic', 'oppTactic'], ['opt-camera', 'camera']]) {
     if (settings[key] === undefined || ![...$(id).options].some((o) => o.value === settings[key])) settings[key] = DEFAULTS[key];
     const el = $(id);
     el.value = settings[key];
@@ -398,6 +434,8 @@ function fillMenu() {
   $('opt-team').onchange = () => { settings.team = Math.max(1, Math.min(99999, parseInt($('opt-team').value, 10) || 9999)); $('opt-team').value = settings.team; saveSettings(); };
   $('opt-intake').checked = settings.autoIntake;
   $('opt-intake').onchange = () => { settings.autoIntake = $('opt-intake').checked; saveSettings(); };
+  $('opt-shoot').checked = settings.autoShoot;
+  $('opt-shoot').onchange = () => { settings.autoShoot = $('opt-shoot').checked; saveSettings(); };
   $('opt-roles').checked = settings.showRoles;
   $('opt-roles').onchange = () => { settings.showRoles = $('opt-roles').checked; saveSettings(); };
   $('opt-shadows').checked = settings.shadows;
@@ -415,10 +453,13 @@ function describe() {
   $('opt-team').disabled = !!pr.team;
   if (pr.team) $('opt-team').value = pr.team; else $('opt-team').value = settings.team;
   for (const el of document.querySelectorAll('.bot-opt')) el.hidden = settings.mode !== 'match';
+  document.body.classList.toggle('touch', touchMode());
 }
 
 function startGame() {
   $('menu').hidden = true;
+  // Phones: go fullscreen where the browser allows it (not on iPhone Safari).
+  if (touchMode() && document.fullscreenEnabled && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
   camMode = settings.camera;
   newWorld();
   input.clearEdges();
@@ -431,6 +472,8 @@ $('btn-menu').onclick = () => { $('pause').hidden = true; $('menu').hidden = fal
 $('btn-again').onclick = () => newWorld();
 $('btn-results-menu').onclick = () => { $('results').hidden = true; $('menu').hidden = false; paused = true; };
 $('btn-help').onclick = () => { $('help').hidden = !$('help').hidden; };
+$('t-full').hidden = !document.fullscreenEnabled;
+$('t-full').onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {}); };
 fillMenu();
 
 // ---------- Loop ----------
@@ -492,7 +535,8 @@ requestAnimationFrame(frame);
 window.sim = {
   get world() { return world; },
   settings,
-  step(n = 1, cmd) { if (cmd) frameInput = { fx: 0, fy: 0, rot: 0, shoot: false, intake: false, ...cmd }; for (let i = 0; i < n; i++) step(STEP); handleEvents(); },
+  input,
+  step(n = 1, cmd) { if (cmd) frameInput = { fx: 0, fy: 0, rot: 0, aim: null, shoot: false, intake: false, ...cmd }; for (let i = 0; i < n; i++) step(STEP); handleEvents(); },
   cam(m) { camMode = m; camState.init = false; },
   view(p, l) { camMode = 'debug'; camState.dbgPos = new THREE.Vector3(...p); camState.dbgLook = new THREE.Vector3(...l); camState.init = false; },
   draw() { for (const r of world.robots) r.syncMesh(1 / 30); world.fuel.render(); updateCamera(1 / 30); updateHud(); renderer.render(scene, camera); },

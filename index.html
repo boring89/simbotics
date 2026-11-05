@@ -2,7 +2,10 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#0e1116">
   <title>Simbotics REBUILT</title>
   <link rel="stylesheet" href="style.css">
   <script type="importmap">
@@ -35,6 +38,23 @@
   <div id="toasts"></div>
   <div id="corner"><button id="btn-help" title="操作說明 (H)">?</button><span id="fps"></span></div>
 
+  <!-- Touch controls (phones): left half moves, right half points the robot -->
+  <div id="touch">
+    <div id="touch-zone"></div>
+    <div class="t-hint left">移動</div>
+    <div class="t-hint right">轉向</div>
+    <div class="t-buttons">
+      <button id="t-pause" data-key="Escape" aria-label="暫停">❚❚</button>
+      <button id="t-cam" data-key="KeyV" aria-label="切換鏡頭">鏡頭</button>
+      <button id="t-full" aria-label="全螢幕">⛶</button>
+    </div>
+    <div class="t-actions">
+      <button id="t-down" data-key="KeyX" hidden>往下</button>
+      <button id="t-climb" data-key="KeyC" hidden>攀爬</button>
+      <button id="t-shoot">射擊</button>
+    </div>
+  </div>
+
   <div id="help" hidden>
     <h3>操作說明</h3>
     <table>
@@ -50,6 +70,7 @@
       <tr><td>Esc / P / Start</td><td>暫停</td></tr>
     </table>
     <p>開著 Intake 把車頭對準己方 OUTPOST 出球口，Human Player 會把 FUEL 滾給你。</p>
+    <p>手機：左半邊螢幕拖曳 = 移動，右半邊拖曳 = 車頭朝向。自動吸球、自動射擊（在己方區域且 HUB 啟用時）。「射擊」按鈕可在區域外手動傳球。</p>
   </div>
 
   <!-- Main menu -->
@@ -85,6 +106,9 @@
         <label class="bot-opt">對手戰術
           <select id="opt-opp-tactic"></select>
         </label>
+        <label>操作
+          <select id="opt-control"><option value="auto">自動偵測</option><option value="keyboard">鍵盤 / 手把</option><option value="touch">觸控（手機）</option></select>
+        </label>
         <label>鏡頭
           <select id="opt-camera"><option value="driver">Driver Station</option><option value="chase">跟車</option><option value="broadcast">轉播</option></select>
         </label>
@@ -92,6 +116,7 @@
       <p id="preset-desc" class="desc"></p>
       <div class="checks">
         <label><input id="opt-intake" type="checkbox"> 自動吸球</label>
+        <label><input id="opt-shoot" type="checkbox"> 自動射擊</label>
         <label><input id="opt-shadows" type="checkbox"> 陰影</label>
         <label class="bot-opt"><input id="opt-roles" type="checkbox"> 顯示電腦角色</label>
       </div>

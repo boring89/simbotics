@@ -13,7 +13,7 @@
 html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", "Noto Sans TC", sans-serif; }
 #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 [hidden] { display: none !important; }
-body.in-menu #scorebar, body.in-menu #hubs, body.in-menu #robot-card, body.in-menu #prompt, body.in-menu #corner, body.in-menu #help { display: none; }
+body.in-menu #scorebar, body.in-menu #hubs, body.in-menu #robot-card, body.in-menu #prompt, body.in-menu #corner, body.in-menu #help, body.in-menu #touch { display: none; }
 button, select, input { font: inherit; color: inherit; }
 
 /* Scoreboard */
@@ -69,9 +69,9 @@ button, select, input { font: inherit; color: inherit; }
 #help td:first-child { color: var(--fuel); white-space: nowrap; }
 #help p { color: var(--muted); margin: 8px 0 0; }
 
-/* Overlays */
-.overlay { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(8, 10, 14, .55); backdrop-filter: blur(3px); padding: 16px; overflow-y: auto; }
-.panel { width: min(560px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+/* Overlays (flex + auto margins so a panel taller than the screen still scrolls from its top) */
+.overlay { position: fixed; inset: 0; display: flex; background: rgba(8, 10, 14, .55); backdrop-filter: blur(3px); padding: 16px; padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); overflow-y: auto; }
+.panel { margin: auto; width: min(560px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
 .panel.small { width: min(320px, 100%); display: flex; flex-direction: column; gap: 8px; }
 .panel h2 { margin: 0 0 12px; }
 .brand { margin-bottom: 18px; }
@@ -79,7 +79,7 @@ button, select, input { font: inherit; color: inherit; }
 .brand h1 { margin: 2px 0; font-size: 46px; letter-spacing: .04em; line-height: 1; background: linear-gradient(90deg, var(--red), var(--fuel) 50%, var(--blue)); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .brand .sub { color: var(--muted); }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-@media (max-width: 520px) { .grid { grid-template-columns: 1fr; } }
+@media (max-width: 340px) { .grid { grid-template-columns: 1fr; } }
 label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 select, input[type=number] { background: #0b0d12; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; color: var(--text); font-size: 14px; }
 .desc { color: var(--muted); font-size: 12px; min-height: 18px; margin: 10px 0; }
@@ -109,4 +109,69 @@ button.primary:hover { filter: brightness(1.08); }
   #scorebar .side { min-width: 96px; padding: 6px 10px; gap: 8px; }
   #scorebar .side span:not(.lbl) { font-size: 22px; }
   #robot-card { width: 190px; }
+}
+
+/* ---------- Touch controls ---------- */
+#touch { display: none; }
+body.touch #touch { display: block; }
+body.touch #corner, body.touch #help { display: none; }
+body.touch #scorebar, body.touch #hubs, body.touch #robot-card, body.touch #prompt, body.touch #toasts { pointer-events: none; }
+#touch-zone { position: fixed; inset: 0; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.stick { position: fixed; width: 112px; height: 112px; margin: -56px 0 0 -56px; border-radius: 50%; border: 2px solid rgba(255,255,255,.25); background: rgba(255,255,255,.06); pointer-events: none; opacity: 0; transition: opacity .15s; }
+.stick.on { opacity: 1; }
+.stick .knob { position: absolute; left: 50%; top: 50%; width: 48px; height: 48px; margin: -24px 0 0 -24px; border-radius: 50%; background: rgba(255,255,255,.45); }
+.stick.aim .knob { background: rgba(246, 211, 28, .6); }
+.t-hint { position: fixed; bottom: calc(18% + env(safe-area-inset-bottom)); font-size: 12px; color: rgba(255,255,255,.28); letter-spacing: .1em; pointer-events: none; }
+#touch.used .t-hint { display: none; }
+.t-hint.left { left: 25%; transform: translateX(-50%); }
+.t-hint.right { right: 25%; transform: translateX(50%); }
+#touch button { margin: 0; touch-action: manipulation; -webkit-tap-highlight-color: transparent; background: rgba(18, 21, 28, .78); border: 1px solid rgba(255,255,255,.16); font-weight: 700; }
+.t-buttons { position: fixed; top: max(10px, env(safe-area-inset-top)); right: max(10px, env(safe-area-inset-right)); display: flex; gap: 6px; }
+.t-buttons button { height: 36px; min-width: 36px; padding: 0 10px; font-size: 13px; border-radius: 8px; }
+.t-actions { position: fixed; right: max(14px, env(safe-area-inset-right)); bottom: max(14px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+.t-actions button { width: 64px; height: 64px; border-radius: 50%; padding: 0; font-size: 13px; }
+#t-shoot { border-color: rgba(246, 211, 28, .5); color: var(--fuel); }
+#t-shoot.down { background: rgba(246, 211, 28, .35); color: #fff; }
+#t-climb { border-color: rgba(74, 222, 128, .6); color: #86efac; }
+
+/* Compact HUD on phones */
+body.touch #robot-card { left: max(10px, env(safe-area-inset-left)); top: max(10px, env(safe-area-inset-top)); bottom: auto; width: 150px; padding: 6px 10px; border-left-width: 3px; }
+body.touch #robot-name { font-size: 10px; margin-bottom: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+body.touch #fuel-count { font-size: 22px; }
+body.touch #robot-card .bar { margin: 3px 0 5px; }
+body.touch .chips { margin-bottom: 2px; flex-wrap: wrap; gap: 4px; }
+body.touch .chip { font-size: 10px; padding: 1px 6px; }
+body.touch #intake-state, body.touch .stats { display: none; }
+body.touch #prompt { bottom: auto; top: 40%; font-size: 12px; }
+body.touch .toast { font-size: 12px; padding: 6px 12px; }
+
+/* Landscape phone: short screen, keep the top strip thin */
+@media (orientation: landscape) and (max-height: 520px) {
+  body.touch #scorebar { top: max(6px, env(safe-area-inset-top)); }
+  body.touch #scorebar .side { min-width: 84px; padding: 2px 10px; gap: 8px; }
+  body.touch #scorebar .side span:not(.lbl) { font-size: 20px; }
+  body.touch #scorebar .mid { padding: 2px 12px; min-width: 80px; }
+  body.touch #clock { font-size: 18px; }
+  body.touch #phase { font-size: 9px; }
+  body.touch #hubs { top: 50px; }
+  body.touch #toasts { top: 80px; }
+  .panel { padding: 16px; }
+  .brand { margin-bottom: 10px; }
+  .brand h1 { font-size: 32px; }
+  .grid { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .rules { display: none; }
+}
+
+/* Upright phone: score strip on top, robot card under it */
+@media (orientation: portrait) {
+  body.touch #scorebar { top: max(8px, env(safe-area-inset-top)); left: 10px; right: 10px; transform: none; }
+  body.touch #scorebar .side { flex: 1; min-width: 0; padding: 4px 12px; }
+  body.touch #scorebar .side span:not(.lbl) { font-size: 22px; }
+  body.touch #scorebar .mid { padding: 3px 10px; min-width: 76px; }
+  body.touch #clock { font-size: 20px; }
+  body.touch #hubs { top: calc(max(8px, env(safe-area-inset-top)) + 54px); }
+  body.touch #toasts { top: calc(max(8px, env(safe-area-inset-top)) + 196px); }
+  body.touch #robot-card { top: calc(max(8px, env(safe-area-inset-top)) + 84px); }
+  body.touch .t-buttons { top: calc(max(8px, env(safe-area-inset-top)) + 84px); }
+  body.touch .t-hint { bottom: calc(26% + env(safe-area-inset-bottom)); }
 }
