@@ -4,7 +4,7 @@ globalThis.document = { createElement: () => new OffscreenCanvas(1, 1) };
 
 const THREE = await import('../js/three.js');
 const { buildField } = await import('../js/field.js');
-const { createWorld, stepWorld } = await import('../js/sim.js');
+const { createWorld, stepWorld, summarize } = await import('../js/sim.js');
 const { MatchLog } = await import('../js/log.js');
 await import('../js/ai.js');
 const DEFAULT_FLAGS = { ...globalThis.AIFLAGS };
@@ -33,18 +33,7 @@ function run(job) {
   while (m.phase !== 'post') stepWorld(world, STEP, null);
   // Let FUEL still in the air land.
   for (let i = 0; i < 360; i++) stepWorld(world, STEP, null);
-  const out = {
-    id: job.id,
-    seed: job.seed,
-    ms: Math.round(performance.now() - t0),
-    total: { red: m.total('red'), blue: m.total('blue') },
-    fuel: { red: m.score.red.autoFuel + m.score.red.teleFuel, blue: m.score.blue.autoFuel + m.score.blue.teleFuel },
-    robots: world.robots.map((r) => ({
-      alliance: r.alliance, number: r.number, preset: r.p.model, player: r.isPlayer,
-      ...r.stats, climb: r.climbLevel,
-    })),
-    log: world.log ? world.log.text() : null,
-  };
+  const out = { id: job.id, seed: job.seed, ms: Math.round(performance.now() - t0), ...summarize(world), log: world.log ? world.log.text() : null };
   for (const r of world.robots) scene.remove(r.mesh);
   scene.remove(world.fuel.mesh);
   world.fuel.mesh.geometry.dispose();

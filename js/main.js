@@ -2,7 +2,9 @@ import * as THREE from './three.js';
 import { HL, ROBOT_PRESETS, BOT_SKILL, COLORS, side, other } from './config.js';
 import { buildField, inZone } from './field.js';
 import { TACTICS, ROLE_LABEL } from './ai.js';
-import { createWorld, stepWorld } from './sim.js';
+import { createWorld, stepWorld, summarize } from './sim.js';
+import { EventRunner, newEvent, matchSettings } from './event.js';
+import { EventUI } from './eventui.js';
 import { Input } from './input.js';
 import { MatchLog, robotName } from './log.js';
 
@@ -11,7 +13,7 @@ const STEP = 1 / 120;
 
 // ---------- Settings ----------
 const isTouchDevice = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0 && !matchMedia('(pointer: fine)').matches;
-const DEFAULTS = { mode: 'match', alliance: 'blue', preset: 'balanced', allySkill: 'hard', oppSkill: 'einstein', allyTactic: 'balanced', oppTactic: 'random', camera: 'driver', control: 'auto', allyBots: ['random', 'random'], oppBots: ['random', 'random', 'random'], autoIntake: true, autoShoot: isTouchDevice, logMode: false, team: 9999, shadows: !isTouchDevice, showRoles: true };
+const DEFAULTS = { mode: 'match', alliance: 'blue', preset: 'balanced', allySkill: 'hard', oppSkill: 'einstein', allyTactic: 'balanced', oppTactic: 'random', camera: 'driver', control: 'auto', allyBots: ['random', 'random'], oppBots: ['random', 'random', 'random'], autoIntake: true, autoShoot: isTouchDevice, logMode: false, evSize: '32', evLevel: 'regional', team: 9999, shadows: !isTouchDevice, showRoles: true };
 let settings = { ...DEFAULTS };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('simbotics.settings') || '{}')); } catch { /* storage unavailable */ }
 const saveSettings = () => { try { localStorage.setItem('simbotics.settings', JSON.stringify(settings)); } catch { /* ignore */ } };
@@ -65,15 +67,17 @@ let paused = false;
 let camMode = settings.camera;
 const camState = { yaw: 0, pos: new THREE.Vector3(), look: new THREE.Vector3(), init: false };
 
-function newWorld() {
+// cfg: the settings for this match (an event match passes its own lineup).
+function newWorld(cfg = settings) {
   if (world) {
     scene.remove(world.fuel.mesh);
     world.fuel.mesh.geometry.dispose();
     for (const r of world.robots) { scene.remove(r.mesh); if (r.tag) scene.remove(r.tag); }
   }
-  const mode = settings.mode, me = settings.alliance;
-  world = createWorld(scene, field, settings);
-  world.log = settings.logMode && mode !== 'practice' ? new MatchLog(world, settings) : null;
+  const mode = cfg.mode, me = cfg.alliance;
+  world = createWorld(scene, field, cfg);
+  world.cfg = cfg;
+  world.log = cfg.logMode && mode !== 'practice' ? new MatchLog(world, cfg) : null;
   if (mode === 'match') {
     const t = world.brains[other(me)];
     setTimeout(() => toast(`對手：${t.skill.name} · ${TACTICS[t.tactic]}`, other(me)), 400);
@@ -325,6 +329,11 @@ function showResults() {
       setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     };
   }
+  const ev = world.cfg.eventMatch;
+  $('btn-again').hidden = !!ev;
+  $('btn-results-menu').hidden = !!ev;
+  $('btn-results-event').hidden = !ev;
+  if (ev && !world.recorded) { world.recorded = true; runner.done(ev, summarize(world), true); }
   $('results').hidden = false;
 }
 
@@ -340,7 +349,7 @@ function fillMenu() {
   const tacOpts = Object.entries(TACTICS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
   $('opt-ally-tactic').innerHTML = tacOpts;
   $('opt-opp-tactic').innerHTML = `<option value="random">隨機</option>${tacOpts}`;
-  for (const [id, key] of [['opt-control', 'control'], ['opt-mode', 'mode'], ['opt-alliance', 'alliance'], ['opt-preset', 'preset'], ['opt-ally-skill', 'allySkill'], ['opt-opp-skill', 'oppSkill'], ['opt-ally-tactic', 'allyTactic'], ['opt-opp-tactic', 'oppTactic'], ['opt-camera', 'camera']]) {
+  for (const [id, key] of [['opt-control', 'control'], ['opt-mode', 'mode'], ['opt-alliance', 'alliance'], ['opt-preset', 'preset'], ['opt-ally-skill', 'allySkill'], ['opt-opp-skill', 'oppSkill'], ['opt-ally-tactic', 'allyTactic'], ['opt-opp-tactic', 'oppTactic'], ['opt-camera', 'camera'], ['opt-ev-size', 'evSize'], ['opt-ev-level', 'evLevel']]) {
     if (settings[key] === undefined || ![...$(id).options].some((o) => o.value === settings[key])) settings[key] = DEFAULTS[key];
     const el = $(id);
     el.value = settings[key];
@@ -382,12 +391,24 @@ function describe() {
   $('preset-desc').textContent = `${pr.desc}  容量 ${pr.capacity} · 射速 ${pr.fireRate}/秒 · 最高 L${pr.climbMax}${pr.fitsTrench ? ' · 可鑽 TRENCH' : ''}`;
   $('opt-team').disabled = !!pr.team;
   if (pr.team) $('opt-team').value = pr.team; else $('opt-team').value = settings.team;
-  for (const el of document.querySelectorAll('.bot-opt')) el.hidden = settings.mode !== 'match';
+  for (const el of document.querySelectorAll('.bot-opt, .event-opt')) {
+    el.hidden = !(el.classList.contains('bot-opt') && settings.mode === 'match' || el.classList.contains('event-opt') && settings.mode === 'event');
+  }
+  $('btn-start').textContent = settings.mode === 'event' && runner.ev ? '繼續賽事' : '開始';
   document.body.classList.toggle('touch', touchMode());
 }
 
 function startGame() {
   $('menu').hidden = true;
+  if (settings.mode === 'event') {
+    if (!runner.ev) {
+      const pr = ROBOT_PRESETS[settings.preset];
+      runner.start(newEvent(+settings.evSize, settings.evLevel, { preset: settings.preset, number: pr.team ?? settings.team }));
+    }
+    paused = true;
+    eventUI.show();
+    return;
+  }
   // Phones: go fullscreen where the browser allows it (not on iPhone Safari).
   if (touchMode() && document.fullscreenEnabled && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
   camMode = settings.camera;
@@ -395,11 +416,27 @@ function startGame() {
   input.clearEdges();
 }
 
+// ---------- Events ----------
+const runner = new EventRunner(() => eventUI.refresh());
+const eventUI = new EventUI(runner, {
+  play(id) {
+    const { settings: cfg } = matchSettings(runner.ev, id, settings);
+    cfg.eventMatch = id;
+    if (touchMode() && document.fullscreenEnabled && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
+    camMode = settings.camera;
+    newWorld(cfg);
+    input.clearEdges();
+  },
+  menu() { $('menu').hidden = false; paused = true; describe(); },
+});
+const toEvent = () => { $('results').hidden = true; $('pause').hidden = true; paused = true; eventUI.show(); };
+
 $('btn-start').onclick = startGame;
 $('btn-resume').onclick = () => { paused = false; $('pause').hidden = true; };
-$('btn-restart').onclick = () => newWorld();
-$('btn-menu').onclick = () => { $('pause').hidden = true; $('menu').hidden = false; paused = true; };
-$('btn-again').onclick = () => newWorld();
+$('btn-restart').onclick = () => newWorld(world.cfg);
+$('btn-menu').onclick = () => { if (world.cfg.eventMatch) { toEvent(); return; } $('pause').hidden = true; $('menu').hidden = false; paused = true; };
+$('btn-again').onclick = () => newWorld(world.cfg);
+$('btn-results-event').onclick = toEvent;
 $('btn-results-menu').onclick = () => { $('results').hidden = true; $('menu').hidden = false; paused = true; };
 $('btn-help').onclick = () => { $('help').hidden = !$('help').hidden; };
 $('t-full').hidden = !document.fullscreenEnabled;
@@ -416,7 +453,7 @@ function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
 
-  if (world && $('menu').hidden) {
+  if (world && $('menu').hidden && $('event').hidden) {
     if (input.pressed('Escape') || input.pressed('KeyP')) {
       if ($('results').hidden) { paused = !paused; $('pause').hidden = !paused; }
     }
@@ -426,7 +463,7 @@ function frame(now) {
       camState.init = false;
       toast(`鏡頭：${{ driver: 'Driver Station', chase: '跟車', broadcast: '轉播' }[camMode]}`, 'neutral');
     }
-    if (input.pressed('KeyR')) newWorld();
+    if (input.pressed('KeyR') && !world.recorded) newWorld(world.cfg);
     if (input.pressed('KeyH')) $('help').hidden = !$('help').hidden;
     if (input.pressed('KeyI')) { settings.autoIntake = !settings.autoIntake; saveSettings(); $('opt-intake').checked = settings.autoIntake; }
     if (input.pressed('KeyC')) world.player.requestClimb(world);
@@ -454,7 +491,7 @@ function frame(now) {
     input.clearEdges();
   }
 
-  document.body.classList.toggle('in-menu', !$('menu').hidden);
+  document.body.classList.toggle('in-menu', !$('menu').hidden || !$('event').hidden);
   fps.n++; fps.t += dt;
   if (fps.t > 0.5) { $('fps').textContent = `${Math.round(fps.n / fps.t)} fps`; fps.n = 0; fps.t = 0; }
   renderer.render(scene, camera);
@@ -466,6 +503,7 @@ window.sim = {
   get world() { return world; },
   settings,
   input,
+  runner,
   step(n = 1, cmd) { if (cmd) frameInput = { fx: 0, fy: 0, rot: 0, aim: null, shoot: false, intake: false, ...cmd }; for (let i = 0; i < n; i++) step(STEP); handleEvents(); },
   cam(m) { camMode = m; camState.init = false; },
   view(p, l) { camMode = 'debug'; camState.dbgPos = new THREE.Vector3(...p); camState.dbgLook = new THREE.Vector3(...l); camState.init = false; },

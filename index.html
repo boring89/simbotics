@@ -78,6 +78,7 @@
         <label>模式
           <select id="opt-mode">
             <option value="match">3v3 比賽（電腦隊友/對手）</option>
+            <option value="event">賽事（資格賽 → 選聯盟 → 淘汰賽）</option>
             <option value="solo">單人比賽（計時，無其他機器人）</option>
             <option value="practice">自由練習（不計時）</option>
           </select>
@@ -91,13 +92,19 @@
         <label>隊號
           <input id="opt-team" type="number" min="1" max="99999">
         </label>
+        <label class="event-opt">賽事規模
+          <select id="opt-ev-size"><option value="24">24 隊（每隊 8 場）</option><option value="32">32 隊（每隊 9 場）</option><option value="40">40 隊（每隊 9 場）</option></select>
+        </label>
+        <label class="event-opt">賽事等級
+          <select id="opt-ev-level"><option value="regional">區域賽（強弱混合）</option><option value="champs">冠軍賽（強隊多）</option></select>
+        </label>
         <label class="bot-opt">隊友 AI
           <select id="opt-ally-skill"></select>
         </label>
         <label class="bot-opt">對手 AI
           <select id="opt-opp-skill"></select>
         </label>
-        <label class="bot-opt">隊友戰術
+        <label class="bot-opt event-opt">隊友戰術
           <select id="opt-ally-tactic"></select>
         </label>
         <label class="bot-opt">對手戰術
@@ -151,8 +158,13 @@
     <div class="panel">
       <div id="results-body"></div>
       <button id="btn-again" class="primary">再來一場</button>
+      <button id="btn-results-event" class="primary" hidden>回到賽事</button>
       <button id="btn-results-menu">主選單</button>
     </div>
+  </div>
+
+  <div id="event" class="overlay" hidden>
+    <div class="panel wide"><div id="event-body"></div></div>
   </div>
 
   <script type="module" src="js/main.js"></script>

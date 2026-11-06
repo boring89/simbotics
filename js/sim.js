@@ -28,15 +28,20 @@ export function createWorld(scene, field, settings, playerBot = null) {
   if (mode === 'match') {
     // Picked robots first; "random" slots get the real 2026 robots nobody took (shuffled),
     // topped up with generic ones.
-    const picks = [...settings.allyBots, ...settings.oppBots];
+    const picks = [...(settings.allyBots || []), ...(settings.oppBots || [])];
     const real = Object.keys(ROBOT_PRESETS).filter((k) => ROBOT_PRESETS[k].real && k !== settings.preset && !picks.includes(k));
     for (let i = real.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [real[i], real[j]] = [real[j], real[i]]; }
     const pool = [...real, 'balanced', 'shuttle', 'hopper'];
+    // Event matches name every robot: settings.lineup = { ally: [2], opp: [3] } of { preset, number, skill }.
+    const line = settings.lineup;
     for (let i = 0; i < 5; i++) {
-      const pr = ROBOT_PRESETS[ROBOT_PRESETS[picks[i]] ? picks[i] : pool.shift()];
-      const num = pr.team && !used.has(pr.team) ? pr.team : randomTeam(used);
+      const t = line && (i < 2 ? line.ally[i] : line.opp[i - 2]);
+      const pr = t ? ROBOT_PRESETS[t.preset] : ROBOT_PRESETS[ROBOT_PRESETS[picks[i]] ? picks[i] : pool.shift()];
+      const num = t ? t.number : pr.team && !used.has(pr.team) ? pr.team : randomTeam(used);
       used.add(num);
-      robots.push(new Robot(robots.length, i < 2 ? me : other(me), num, pr, false));
+      const r = new Robot(robots.length, i < 2 ? me : other(me), num, pr, false);
+      if (t?.skill) r.botSkill = BOT_SKILL[t.skill];
+      robots.push(r);
     }
   }
 
@@ -85,11 +90,26 @@ export function createWorld(scene, field, settings, playerBot = null) {
   for (const r of robots) {
     const brain = world.brains[r.alliance];
     if (r.isPlayer && !playerBot) { slots[r.alliance]++; continue; }
-    const bot = new Bot(r, world, r.isPlayer ? BOT_SKILL[playerBot] : brain.skill, slots[r.alliance]++ % 3, brain);
+    const bot = new Bot(r, world, r.isPlayer ? BOT_SKILL[playerBot] : r.botSkill || brain.skill, slots[r.alliance]++ % 3, brain);
     if (r.isPlayer) world.playerBot = bot;
     world.bots.push(bot);
   }
   return world;
+}
+
+// Final score and per-robot numbers, as plain data (benchmarks and events store these).
+export function summarize(world) {
+  const m = world.match;
+  const part = (a) => ({ ...m.score[a], total: m.total(a), fuel: m.score[a].autoFuel + m.score[a].teleFuel, rp: m.rankingPoints(a) });
+  return {
+    total: { red: m.total('red'), blue: m.total('blue') },
+    fuel: { red: m.score.red.autoFuel + m.score.red.teleFuel, blue: m.score.blue.autoFuel + m.score.blue.teleFuel },
+    red: part('red'), blue: part('blue'),
+    robots: world.robots.map((r) => ({
+      alliance: r.alliance, number: r.number, preset: r.p.model, player: r.isPlayer,
+      ...r.stats, climb: r.climbLevel,
+    })),
+  };
 }
 
 function feedOutposts(world, dt) {
