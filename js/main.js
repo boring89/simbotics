@@ -246,6 +246,7 @@ function updateHud() {
   else if (canClimb) prompt = touch ? '可以攀爬 TOWER' : '[C] 攀爬 TOWER';
   else if (player.aimMode === 'pass' && player.fuel > 0) prompt = '不在己方區域 — 射擊會變成傳球';
   else if (match.enabled && !match.hubActive(player.alliance) && player.fuel > 0) prompt = '己方 HUB 停用中 — 先囤積 FUEL';
+  else if (player.outOfRange && player.fuel > 0) prompt = `超出射程（${player.maxRange.toFixed(1)} m）— 靠近 HUB 一點`;
   setText('prompt', prompt);
   $('prompt').hidden = !prompt;
 }

@@ -377,7 +377,7 @@ function custom(k, r) {
     }
   }
   // Hopper: clear walls on aluminium posts. Fixed shooters take the back of the robot.
-  const fixedShot = b.shooter === 'wide' || b.shooter === 'fixed';
+  const fixedShot = p.turrets.some((t) => t.fixed !== undefined && Math.abs(t.fixed) > 2);
   const hx0 = (round ? -fx : -fx) + (fixedShot ? 0.26 : 0.04), hx1 = fx - (p.intakeDeploy ? 0.04 : 0.14), hy0 = 0.13;
   const hz = fz - 0.02, top = b.hopper === 'expand' ? H - 0.02 : H;
   k.panel(hx1 - hx0, top - hy0, hz * 2, (hx0 + hx1) / 2, (hy0 + top) / 2, 0);
@@ -396,23 +396,24 @@ function custom(k, r) {
   const roller = k.rollerZ(0.04, iw * 2, rubber, ix, 0.08, 0, slide);
   const roller2 = k.rollerZ(0.025, iw * 2, silver, ix - 0.1, 0.16, 0, slide);
   const rollers = [roller, roller2];
-  // Shooter.
+  // Shooters: drums with side plates for fixed ones (built in the barrel's frame, +x = out), domes for turrets.
   const turrets = p.turrets.map((t) => turretGroup(k, t, H));
-  if (b.shooter === 'wide' || b.shooter === 'fixed') {
-    const span = b.shooter === 'wide' ? fz * 2 - 0.1 : 0.22, sx = -fx + 0.12;
-    for (const sz of [-1, 1]) k.box(0.26, H - 0.08, 0.02, dark, sx, 0.12 + (H - 0.08) / 2, sz * (span / 2 + 0.02));
-    rollers.push(k.rollerZ(0.07, span, dark, sx, H - 0.08));
-    const hood = k.box(0.22, 0.015, span, accent, sx - 0.09, H + 0.03, 0);
-    hood.rotation.z = -0.7;
-  } else {
-    for (const tg of turrets) {
-      const small = b.shooter === 'dual';
+  const small = p.turrets.length > 1;
+  p.turrets.forEach((t, i) => {
+    const tg = turrets[i];
+    if (t.fixed !== undefined) {
+      const span = t.width ? t.width * 2 : 0.22, y0 = (t.y ?? H) - 0.12;
+      for (const sz of [-1, 1]) k.box(0.26, y0, 0.02, dark, -0.03, -y0 / 2, sz * (span / 2 + 0.02), tg);
+      rollers.push(k.rollerZ(0.07, span, dark, -0.03, -0.04, 0, tg));
+      const hood = k.box(0.22, 0.015, span, accent, 0.06, 0.07, 0, tg);
+      hood.rotation.z = 0.7;
+    } else {
       k.cyl(small ? 0.11 : 0.15, small ? 0.12 : 0.16, 0.05, dark, 0, 0, 0, tg, 20);
       const hood = k.box(small ? 0.22 : 0.28, 0.12, small ? 0.13 : 0.17, accent, 0.06, 0.08, 0, tg);
       hood.rotation.z = 0.5;
-      if (b.shooter === 'turretFast') for (const z of [-0.06, 0.06]) k.rollerZ(0.05, 0.02, silver, 0.02, 0.1, z, tg);
+      if (b.wheels === 2) for (const z of [-0.06, 0.06]) k.rollerZ(0.05, 0.02, silver, 0.02, 0.1, z, tg);
     }
-  }
+  });
   // Climber.
   if (b.climber === 'l2' || b.climber === 'l3') {
     const tall = b.climber === 'l3' ? 0.5 : 0.3;

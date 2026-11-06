@@ -733,6 +733,8 @@ export class Bot {
       default: mv = this.doSimple(cmd, dt, inOwn);
     }
     if (mv) { cmd.mx = mv[0]; cmd.mz = mv[1]; }
+    // Flywheel-limited robots close in on the HUB when a shot is out of reach.
+    if (cmd.shoot && inOwn && r.maxRange < 20) { const g = this.rangeMove(); if (g) { cmd.mx = g[0]; cmd.mz = g[1]; } }
 
     // Stuck detection.
     const want = Math.hypot(cmd.mx, cmd.mz);
@@ -749,6 +751,23 @@ export class Bot {
       this.sweepGoal = null;
     }
     return cmd;
+  }
+
+  // Move toward the HUB until it is comfortably inside shooting range (null when already there).
+  rangeMove() {
+    const r = this.r, s = side(r.alliance), hub = this.w.field.hubs[r.alliance];
+    const dx = r.x - hub.x, dz = r.z - hub.z, d = Math.hypot(dx, dz);
+    if (!this.rangeIn && d <= r.maxRange - 0.25 || this.rangeIn && d <= r.maxRange - 0.05) { this.rangeIn = true; return null; }
+    this.rangeIn = false;
+    const want = Math.max(0.5, r.maxRange - 0.6);
+    let tx = hub.x + (dx / d) * want, tz = hub.z + (dz / d) * want;
+    // Stay inside our own zone; slide sideways toward the HUB line if the zone edge is in the way.
+    if (s * tx < ZONE_X + 0.35) {
+      tx = s * (ZONE_X + 0.35);
+      const ex = Math.abs(tx - hub.x);
+      tz = hub.z + Math.sign(dz || 1) * Math.sqrt(Math.max(0, want * want - ex * ex));
+    }
+    return this.goTo(tx, tz);
   }
 
   // ---------- Roles ----------

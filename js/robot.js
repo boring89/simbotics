@@ -25,6 +25,22 @@ export function satRect(ax, az, aAxes, ahx, ahz, bx, bz, bAxes, bhx, bhz) {
 }
 
 // Circle (cx, cz, r) against an oriented rectangle. Returns the push that moves the circle out.
+// Flywheel-limited shooters: launch speed needed to drop into the HUB from a horizontal distance d,
+// trying a few arc heights (an adjustable hood) and keeping the slowest.
+const ARCS = [1.0, 0.6, 1.4, 1.9, 0.35];
+function arcSpeed(d, y0, apex) {
+  const top = Math.max(HUB_TOP + 0.05, y0) + apex;
+  const vy = Math.sqrt(2 * G * (top - y0));
+  const T = vy / G + Math.sqrt(2 * (top - HUB_TOP - 0.05) / G);
+  return Math.hypot(vy, d / T);
+}
+// Longest HUB shot (metres) a robot at rest can make with launch speed vmax.
+export function shotRange(vmax, y0) {
+  let best = 0;
+  for (let d = 0.3; d < 12; d += 0.05) if (Math.min(...ARCS.map((a) => arcSpeed(d, y0, a))) <= vmax) best = d;
+  return best;
+}
+
 function circleRect(cx, cz, r, bx, bz, bh, bhx, bhz) {
   const c = Math.cos(bh), s = Math.sin(bh);
   const dx = cx - bx, dz = cz - bz;
@@ -78,6 +94,9 @@ export class Robot {
     this.nextTurret = 0;
     this.turrets = this.p.turrets.map((t) => ({ ...t, angle: t.fixed ?? 0, err: 9, shot: null }));
     this.fixedShooter = this.turrets.some((t) => t.fixed !== undefined);
+    // Builder robots can have a launch speed limit; the rest reach the HUB from anywhere.
+    this.maxRange = this.p.shotSpeed ? shotRange(this.p.shotSpeed, (this.p.height ?? 0.5) + 0.1) : Infinity;
+    this.outOfRange = false;
     this.climbLevel = 0;           // level currently held
     this.climbTarget = 0;
     this.climbY = 0;
@@ -300,7 +319,7 @@ export class Robot {
     if (inZone(this.alliance, this.x)) {
       this.aimMode = 'hub';
       const h = world.field.hubs[this.alliance];
-      return { x: h.x, y: HUB_TOP + 0.05, z: h.z, apex: 1.0 };
+      return { x: h.x, y: HUB_TOP + 0.05, z: h.z, apex: 1.0, hub: true };
     }
     // Outside the alliance zone the shooter lobs FUEL back home instead.
     this.aimMode = 'pass';
@@ -315,7 +334,24 @@ export class Robot {
 
   // Ballistic solution with fixed apex height, compensating for robot velocity.
   solveShot(tgt, p) {
-    const apex = Math.max(tgt.y, p.y) + tgt.apex;
+    const vmax = this.p.shotSpeed;
+    if (vmax && tgt.hub) {
+      // Flatten or loft the arc if the default one needs more speed than the flywheel gives.
+      let best = null;
+      for (const a of ARCS) {
+        const s = this.solveArc(tgt, p, a);
+        s.speed = Math.hypot(s.vx, s.vy, s.vz);
+        if (s.speed <= vmax) return s;
+        if (!best || s.speed < best.speed) best = s;
+      }
+      best.out = true;
+      return best;
+    }
+    return this.solveArc(tgt, p, tgt.apex);
+  }
+
+  solveArc(tgt, p, arc) {
+    const apex = Math.max(tgt.y, p.y) + arc;
     const vy = Math.sqrt(2 * G * (apex - p.y));
     const T = vy / G + Math.sqrt(2 * (apex - tgt.y) / G);
     const hvx = (tgt.x - p.x) / T - this.vx;
@@ -327,6 +363,9 @@ export class Robot {
     const tgt = this.aimPoint(world);
     for (const t of this.turrets) {
       t.shot = this.solveShot(tgt, this.turretWorld(t));
+    }
+    this.outOfRange = this.turrets.every((t) => t.shot.out);
+    for (const t of this.turrets) {
       const want = wrap(t.shot.yaw - this.h);
       if (t.fixed !== undefined) { t.err = Math.abs(wrap(want - t.fixed)); continue; }
       // Counter-rotate against the chassis so the turret holds aim while the robot spins.
@@ -353,7 +392,7 @@ export class Robot {
       // A fixed shooter fires down its barrel, so it only needs to be close enough to land in
       // the opening (about 30 cm of error at the target).
       const tol = u.fixed !== undefined ? Math.min(0.2, 0.3 / Math.max(1, u.shot ? u.shot.dist : 1)) : 0.08;
-      if (u.err < tol && u.shot) { t = u; this.nextTurret = (this.nextTurret + k + 1) % n; break; }
+      if (u.err < tol && u.shot && !u.shot.out) { t = u; this.nextTurret = (this.nextTurret + k + 1) % n; break; }
     }
     if (!t) return;
     this.fireT = 1 / (this.p.fireRate * this.boost);
