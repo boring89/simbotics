@@ -3,6 +3,7 @@ import { Fuel } from './fuel.js';
 import { Robot } from './robot.js';
 import { Match } from './match.js';
 import { Bot, TeamBrain, TACTICS } from './ai.js';
+import { registerBuilds } from './parts.js';
 
 // Match setup and the fixed-rate physics step, shared by the game page and the headless
 // benchmark (which runs whole matches in Web Workers without drawing anything).
@@ -16,6 +17,8 @@ function randomTeam(used) {
 
 // playerBot: a BOT_SKILL key to have a bot drive the player's robot (benchmarks), else null.
 export function createWorld(scene, field, settings, playerBot = null) {
+  // Builder robots travel with the settings so Web Workers know them too.
+  if (settings.customs) registerBuilds(settings.customs);
   const mode = settings.mode;
   const match = new Match(mode === 'practice' ? 'practice' : 'match');
   const robots = [];

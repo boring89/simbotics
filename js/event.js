@@ -1,4 +1,5 @@
 import { ROBOT_PRESETS, SCORE } from './config.js';
+import { registerBuilds } from './parts.js';
 
 // Events: qualification schedule, rankings, alliance selection and the 8-alliance double-elimination
 // playoff. The state is plain JSON kept in localStorage; matches without the player run headless in
@@ -263,6 +264,7 @@ export function matchSettings(ev, id, base) {
       allySkill: brain(ours), oppSkill: brain(lu[opp]),
       allyTactic: (lu[color].includes(ev.me) && base.allyTactic) || 'balanced', oppTactic: 'balanced',
       lineup: { ally: ours.slice(1).map(t), opp: lu[opp].map(t) },
+      customs: ev.customs || [],
     },
     mine: lu[color].includes(ev.me),
     playerBot: lead.skill,
@@ -280,6 +282,7 @@ export function save(ev) {
 export class EventRunner {
   constructor(onChange) {
     this.ev = load();
+    if (this.ev?.customs) registerBuilds(this.ev.customs);
     this.onChange = onChange;
     this.busy = new Set();
     this.workers = [];

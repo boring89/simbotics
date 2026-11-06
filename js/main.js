@@ -5,6 +5,8 @@ import { TACTICS, ROLE_LABEL } from './ai.js';
 import { createWorld, stepWorld, summarize } from './sim.js';
 import { EventRunner, newEvent, matchSettings } from './event.js';
 import { EventUI } from './eventui.js';
+import { Builder } from './builder.js';
+import { loadBuilds, registerBuilds, presetKey } from './parts.js';
 import { Input } from './input.js';
 import { MatchLog, robotName } from './log.js';
 
@@ -48,6 +50,7 @@ for (const x of [-6, 0, 6]) {
 }
 
 const field = buildField(scene);
+registerBuilds(loadBuilds());
 const input = new Input();
 
 function resize() {
@@ -75,6 +78,7 @@ function newWorld(cfg = settings) {
     for (const r of world.robots) { scene.remove(r.mesh); if (r.tag) scene.remove(r.tag); }
   }
   const mode = cfg.mode, me = cfg.alliance;
+  if (!cfg.customs) cfg = { ...cfg, customs: loadBuilds() };
   world = createWorld(scene, field, cfg);
   world.cfg = cfg;
   world.log = cfg.logMode && mode !== 'practice' ? new MatchLog(world, cfg) : null;
@@ -340,8 +344,10 @@ function showResults() {
 // ---------- Menu ----------
 function fillMenu() {
   const presetSel = $('opt-preset');
-  const opts = (real) => Object.entries(ROBOT_PRESETS).filter(([, p]) => !!p.real === real).map(([k, p]) => `<option value="${k}">${p.name}</option>`).join('');
-  presetSel.innerHTML = `<optgroup label="2026 真實機器人">${opts(true)}</optgroup><optgroup label="通用">${opts(false)}</optgroup>`;
+  const opts = (real) => Object.entries(ROBOT_PRESETS).filter(([, p]) => !!p.real === real && !p.custom).map(([k, p]) => `<option value="${k}">${p.name}</option>`).join('');
+  const mine = loadBuilds().map((b) => `<option value="${presetKey(b)}">${b.name.replace(/[<&]/g, '')}</option>`).join('');
+  const groups = `<optgroup label="2026 真實機器人">${opts(true)}</optgroup><optgroup label="通用">${opts(false)}</optgroup>${mine ? `<optgroup label="我的機器人">${mine}</optgroup>` : ''}`;
+  presetSel.innerHTML = groups;
   if (!ROBOT_PRESETS[settings.preset]) settings.preset = DEFAULTS.preset;
   const skillOpts = Object.entries(BOT_SKILL).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
   $('opt-ally-skill').innerHTML = skillOpts;
@@ -356,7 +362,7 @@ function fillMenu() {
     el.onchange = () => { settings[key] = el.value; saveSettings(); describe(); };
   }
   // Teammate / opponent robot pickers.
-  const pickOpts = `<option value="random">隨機</option><optgroup label="2026 真實機器人">${opts(true)}</optgroup><optgroup label="通用">${opts(false)}</optgroup>`;
+  const pickOpts = `<option value="random">隨機</option>${groups}`;
   for (const [key, n] of [['allyBots', 2], ['oppBots', 3]]) {
     settings[key] = [...(Array.isArray(settings[key]) && settings[key].length === n ? settings[key] : DEFAULTS[key])];
     for (let i = 0; i < n; i++) {
@@ -403,7 +409,10 @@ function startGame() {
   if (settings.mode === 'event') {
     if (!runner.ev) {
       const pr = ROBOT_PRESETS[settings.preset];
-      runner.start(newEvent(+settings.evSize, settings.evLevel, { preset: settings.preset, number: pr.team ?? settings.team }));
+      const ev = newEvent(+settings.evSize, settings.evLevel, { preset: settings.preset, number: pr.team ?? settings.team });
+      // Keep a copy of a builder robot so later edits don't change a running event.
+      ev.customs = loadBuilds().filter((b) => presetKey(b) === settings.preset);
+      runner.start(ev);
     }
     paused = true;
     eventUI.show();
@@ -429,6 +438,12 @@ const eventUI = new EventUI(runner, {
   },
   menu() { $('menu').hidden = false; paused = true; describe(); },
 });
+const builder = new Builder({
+  team: () => (ROBOT_PRESETS[settings.preset]?.team ?? settings.team),
+  onUse(key) { settings.preset = key; saveSettings(); fillMenu(); $('menu').hidden = false; },
+  onClose() { fillMenu(); $('menu').hidden = false; },
+});
+$('btn-builder').onclick = () => { $('menu').hidden = true; builder.show(settings.preset); };
 const toEvent = () => { $('results').hidden = true; $('pause').hidden = true; paused = true; eventUI.show(); };
 
 $('btn-start').onclick = startGame;
@@ -453,7 +468,7 @@ function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
 
-  if (world && $('menu').hidden && $('event').hidden) {
+  if (world && $('menu').hidden && $('event').hidden && $('builder').hidden) {
     if (input.pressed('Escape') || input.pressed('KeyP')) {
       if ($('results').hidden) { paused = !paused; $('pause').hidden = !paused; }
     }
@@ -491,7 +506,7 @@ function frame(now) {
     input.clearEdges();
   }
 
-  document.body.classList.toggle('in-menu', !$('menu').hidden || !$('event').hidden);
+  document.body.classList.toggle('in-menu', !$('menu').hidden || !$('event').hidden || !$('builder').hidden);
   fps.n++; fps.t += dt;
   if (fps.t > 0.5) { $('fps').textContent = `${Math.round(fps.n / fps.t)} fps`; fps.n = 0; fps.t = 0; }
   renderer.render(scene, camera);
@@ -504,6 +519,7 @@ window.sim = {
   settings,
   input,
   runner,
+  get builder() { return builder; },
   step(n = 1, cmd) { if (cmd) frameInput = { fx: 0, fy: 0, rot: 0, aim: null, shoot: false, intake: false, ...cmd }; for (let i = 0; i < n; i++) step(STEP); handleEvents(); },
   cam(m) { camMode = m; camState.init = false; },
   view(p, l) { camMode = 'debug'; camState.dbgPos = new THREE.Vector3(...p); camState.dbgLook = new THREE.Vector3(...l); camState.init = false; },

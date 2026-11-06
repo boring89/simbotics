@@ -351,7 +351,77 @@ function ripcurrent(k, r) {
   return { fill, rollers, rotor, turrets, hook: hook(k, hl - 0.15, H) };
 }
 
-const BUILDERS = { generic, overload, kepler, alphadogs, artemis, ripcurrent };
+// Robot builder robots: assembled from the picked mechanisms (see parts.js).
+function custom(k, r) {
+  const { p } = r, b = p.build, H = p.height, hl = p.halfL, hw = p.halfW, col = COLORS[r.alliance];
+  const round = p.shape === 'round';
+  const accent = std(p.accent, { metalness: 0.5, roughness: 0.4 }), dark = std(0x1d2026, { roughness: 0.7 });
+  const rubber = std(0x222222, { roughness: 0.9 }), silver = std(0xb8bec6, { metalness: 0.8, roughness: 0.25 });
+  const iw = p.intakeW;
+  if (round) roundBumper(k, hl, col, r.number, 2 * Math.asin(Math.min(0.95, (iw + 0.04) / hl)));
+  else rectBumpers(k, hl, hw, col, r.number);
+  // Inner frame, inside the bumpers.
+  const fx = round ? hl * 0.72 : hl - 0.09, fz = round ? hl * 0.72 : hw - 0.09;
+  if (round) k.cyl(hl - 0.09, hl - 0.09, 0.04, dark, 0, 0.09, 0, undefined, 40);
+  else k.box(fx * 2, 0.04, fz * 2, dark, 0, 0.09, 0);
+  // Drive modules / wheels at the corners.
+  const mod = round ? hl * 0.62 : Math.min(fx, fz) - 0.04;
+  for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+    const x = sx * (round ? mod * 0.75 : fx - 0.06), z = sz * (round ? mod * 0.75 : fz - 0.06);
+    if (b.drive === 'mecanum') {
+      const w = k.rollerZ(0.05, 0.05, rubber, x, 0.06, z);
+      w.castShadow = false;
+    } else {
+      k.cyl(0.055, 0.055, 0.05, accent, x, 0.135, z, undefined, 16);
+      k.cyl(0.03, 0.03, 0.06, silver, x, 0.18, z, undefined, 10);
+    }
+  }
+  // Hopper: clear walls on aluminium posts. Fixed shooters take the back of the robot.
+  const fixedShot = b.shooter === 'wide' || b.shooter === 'fixed';
+  const hx0 = (round ? -fx : -fx) + (fixedShot ? 0.26 : 0.04), hx1 = fx - (p.intakeDeploy ? 0.04 : 0.14), hy0 = 0.13;
+  const hz = fz - 0.02, top = b.hopper === 'expand' ? H - 0.02 : H;
+  k.panel(hx1 - hx0, top - hy0, hz * 2, (hx0 + hx1) / 2, (hy0 + top) / 2, 0);
+  for (const [x, z] of [[hx0, hz], [hx0, -hz], [hx1, hz], [hx1, -hz]]) k.box(0.03, top - hy0, 0.03, accent, x, (hy0 + top) / 2, z);
+  for (const z of [hz, -hz]) k.box(hx1 - hx0, 0.025, 0.03, accent, (hx0 + hx1) / 2, top, z);
+  if (b.hopper === 'expand') {
+    // Fold-up extension walls above the frame.
+    for (const z of [hz, -hz]) { const f = k.box(hx1 - hx0, 0.012, 0.16, accent, (hx0 + hx1) / 2, top + 0.06, z * 1.08); f.rotation.x = z > 0 ? -1.1 : 1.1; }
+  }
+  const fill = { x0: hx0 + 0.02, x1: hx1 - 0.02, z0: -hz + 0.04, z1: hz - 0.04, y0: hy0, y1: top };
+  // Intake: rollers on arms that slide out the front (or sit inside the bumper gap).
+  const slide = new THREE.Group();
+  k.g.add(slide);
+  const ix = p.intakeDeploy ? hl + 0.02 : hl - 0.06;
+  for (const sz of [-1, 1]) k.box(0.36, 0.035, 0.03, accent, ix - 0.18, 0.1, sz * (iw + 0.02), slide);
+  const roller = k.rollerZ(0.04, iw * 2, rubber, ix, 0.08, 0, slide);
+  const roller2 = k.rollerZ(0.025, iw * 2, silver, ix - 0.1, 0.16, 0, slide);
+  const rollers = [roller, roller2];
+  // Shooter.
+  const turrets = p.turrets.map((t) => turretGroup(k, t, H));
+  if (b.shooter === 'wide' || b.shooter === 'fixed') {
+    const span = b.shooter === 'wide' ? fz * 2 - 0.1 : 0.22, sx = -fx + 0.12;
+    for (const sz of [-1, 1]) k.box(0.26, H - 0.08, 0.02, dark, sx, 0.12 + (H - 0.08) / 2, sz * (span / 2 + 0.02));
+    rollers.push(k.rollerZ(0.07, span, dark, sx, H - 0.08));
+    const hood = k.box(0.22, 0.015, span, accent, sx - 0.09, H + 0.03, 0);
+    hood.rotation.z = -0.7;
+  } else {
+    for (const tg of turrets) {
+      const small = b.shooter === 'dual';
+      k.cyl(small ? 0.11 : 0.15, small ? 0.12 : 0.16, 0.05, dark, 0, 0, 0, tg, 20);
+      const hood = k.box(small ? 0.22 : 0.28, 0.12, small ? 0.13 : 0.17, accent, 0.06, 0.08, 0, tg);
+      hood.rotation.z = 0.5;
+      if (b.shooter === 'turretFast') for (const z of [-0.06, 0.06]) k.rollerZ(0.05, 0.02, silver, 0.02, 0.1, z, tg);
+    }
+  }
+  // Climber.
+  if (b.climber === 'l2' || b.climber === 'l3') {
+    const tall = b.climber === 'l3' ? 0.5 : 0.3;
+    for (const z of b.climber === 'l3' ? [0.12, -0.12] : [0]) k.box(0.05, H + tall - 0.1, 0.05, accent, hx1 - 0.08, 0.1 + (H + tall - 0.1) / 2, z);
+  }
+  return { fill, rollers, slide: p.intakeDeploy ? slide : null, turrets, hook: hook(k, hx1 - 0.08, H) };
+}
+
+const BUILDERS = { generic, overload, kepler, alphadogs, artemis, ripcurrent, custom };
 
 // Held FUEL drawn as real balls packed into the hopper volume, bottom layer first.
 // Volume is a box {x0,x1,z0,z1,y0,y1} or an annulus {r0,r1,y0,y1}.

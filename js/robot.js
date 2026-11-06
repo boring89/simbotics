@@ -266,7 +266,7 @@ export class Robot {
       if (inIntake && this.intakeOn) {
         if (this.intakeT <= 0 && this.fuel < p.capacity) {
           fuel.remove(i);
-          this.intakeT = 1 / (20 * this.boost);
+          this.intakeT = 1 / ((p.intakeRate ?? 20) * this.boost);
           this.fuel++;
           this.stats.intaked++;
           return;

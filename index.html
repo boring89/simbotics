@@ -123,7 +123,7 @@
           <select id="opt-camera"><option value="driver">Driver Station</option><option value="chase">跟車</option><option value="broadcast">轉播</option></select>
         </label>
       </div>
-      <p id="preset-desc" class="desc"></p>
+      <p class="desc"><span id="preset-desc"></span> <button id="btn-builder" class="link">機器人工廠 →</button></p>
       <div class="checks">
         <label><input id="opt-intake" type="checkbox"> 自動吸球</label>
         <label><input id="opt-shoot" type="checkbox"> 自動射擊</label>
@@ -165,6 +165,17 @@
 
   <div id="event" class="overlay" hidden>
     <div class="panel wide"><div id="event-body"></div></div>
+  </div>
+
+  <div id="builder" class="overlay" hidden>
+    <div class="panel wide">
+      <div class="b-head"><h2>機器人工廠</h2><div id="b-list" class="b-list"></div></div>
+      <div class="b-main">
+        <div class="b-view"><canvas id="builder-view"></canvas><button data-act="side" class="b-side">藍聯盟配色</button></div>
+        <div id="b-form" class="b-form"></div>
+      </div>
+      <div class="b-actions"><button class="primary" data-act="use">儲存並使用</button><button data-act="save">儲存</button><button data-act="close">返回</button></div>
+    </div>
   </div>
 
   <script type="module" src="js/main.js"></script>
