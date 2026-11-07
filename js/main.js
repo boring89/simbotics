@@ -7,6 +7,11 @@ import { EventRunner, newEvent, matchSettings } from './event.js';
 import { EventUI } from './eventui.js';
 import { Builder } from './builder.js';
 import { loadBuilds, registerBuilds, presetKey } from './parts.js';
+import { AutoEditor } from './autoedit.js';
+import { buildVenue } from './venue.js';
+import { CareerUI } from './careerui.js';
+import { EV_KEY, playerBuild, newMatches, afterMatch } from './career.js';
+import { loadAutos, packRoutine } from './auto.js';
 import { Input } from './input.js';
 import { MatchLog, robotName } from './log.js';
 
@@ -15,10 +20,11 @@ const STEP = 1 / 120;
 
 // ---------- Settings ----------
 const isTouchDevice = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0 && !matchMedia('(pointer: fine)').matches;
-const DEFAULTS = { mode: 'match', alliance: 'blue', preset: 'balanced', allySkill: 'hard', oppSkill: 'einstein', allyTactic: 'balanced', oppTactic: 'random', camera: 'driver', control: 'auto', allyBots: ['random', 'random'], oppBots: ['random', 'random', 'random'], autoIntake: true, autoShoot: isTouchDevice, logMode: false, evSize: '32', evLevel: 'regional', team: 9999, shadows: !isTouchDevice, showRoles: true };
+const DEFAULTS = { mode: 'match', alliance: 'blue', preset: 'balanced', allySkill: 'hard', oppSkill: 'einstein', allyTactic: 'balanced', oppTactic: 'random', camera: 'driver', control: 'auto', allyBots: ['random', 'random'], oppBots: ['random', 'random', 'random'], autoIntake: true, autoShoot: isTouchDevice, logMode: false, evSize: '32', evLevel: 'regional', auto: '', team: 9999, shadows: !isTouchDevice, showRoles: true };
 let settings = { ...DEFAULTS };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('simbotics.settings') || '{}')); } catch { /* storage unavailable */ }
 const saveSettings = () => { try { localStorage.setItem('simbotics.settings', JSON.stringify(settings)); } catch { /* ignore */ } };
+const routine = () => (settings.auto ? packRoutine(loadAutos().find((r) => r.id === settings.auto)) : null);
 const touchMode = () => settings.control === 'touch' || (settings.control === 'auto' && isTouchDevice);
 
 // ---------- Renderer / scene ----------
@@ -50,6 +56,7 @@ for (const x of [-6, 0, 6]) {
 }
 
 const field = buildField(scene);
+const venue = buildVenue(scene);
 registerBuilds(loadBuilds());
 const input = new Input();
 
@@ -79,8 +86,10 @@ function newWorld(cfg = settings) {
   }
   const mode = cfg.mode, me = cfg.alliance;
   if (!cfg.customs) cfg = { ...cfg, customs: loadBuilds() };
+  if (cfg.autoRoutine === undefined) cfg = { ...cfg, autoRoutine: routine() };
   world = createWorld(scene, field, cfg);
   world.cfg = cfg;
+  venue.set(cfg.venue || null, cfg.venueTitle);
   world.log = cfg.logMode && mode !== 'practice' ? new MatchLog(world, cfg) : null;
   if (mode === 'match') {
     const t = world.brains[other(me)];
@@ -242,7 +251,8 @@ function updateHud() {
     $('t-down').hidden = !player.climbing;
   }
   let prompt = '';
-  if (player.climbing) prompt = `TOWER 上 — ${player.climbLevel ? 'L' + player.climbLevel : '攀爬中…'}${touch ? '' : '   [C] 往上  [X] 往下'}`;
+  if (match.phase === 'auto' && player.autoRunner) prompt = `AUTO 程式：${player.autoRunner.label}`;
+  else if (player.climbing) prompt = `TOWER 上 — ${player.climbLevel ? 'L' + player.climbLevel : '攀爬中…'}${touch ? '' : '   [C] 往上  [X] 往下'}`;
   else if (canClimb) prompt = touch ? '可以攀爬 TOWER' : '[C] 攀爬 TOWER';
   else if (player.aimMode === 'pass' && player.fuel > 0) prompt = '不在己方區域 — 射擊會變成傳球';
   else if (match.enabled && !match.hubActive(player.alliance) && player.fuel > 0) prompt = '己方 HUB 停用中 — 先囤積 FUEL';
@@ -338,7 +348,7 @@ function showResults() {
   $('btn-again').hidden = !!ev;
   $('btn-results-menu').hidden = !!ev;
   $('btn-results-event').hidden = !ev;
-  if (ev && !world.recorded) { world.recorded = true; runner.done(ev, summarize(world), true); }
+  if (ev && !world.recorded) { world.recorded = true; eventUI.runner.done(ev, summarize(world), true); }
   $('results').hidden = false;
 }
 
@@ -374,6 +384,11 @@ function fillMenu() {
       el.onchange = () => { settings[key][i] = el.value; saveSettings(); };
     }
   }
+  const autos = loadAutos();
+  if (settings.auto && !autos.some((r) => r.id === settings.auto)) settings.auto = '';
+  $('opt-auto').innerHTML = `<option value="">不用（AUTO 自己開）</option>${autos.map((r) => `<option value="${r.id}">${r.name.replace(/[<&]/g, '')}</option>`).join('')}`;
+  $('opt-auto').value = settings.auto;
+  $('opt-auto').onchange = () => { settings.auto = $('opt-auto').value; saveSettings(); };
   $('opt-team').value = settings.team;
   $('opt-team').onchange = () => { settings.team = Math.max(1, Math.min(99999, parseInt($('opt-team').value, 10) || 9999)); $('opt-team').value = settings.team; saveSettings(); };
   $('opt-intake').checked = settings.autoIntake;
@@ -398,16 +413,19 @@ function describe() {
   $('preset-desc').textContent = `${pr.desc}  容量 ${pr.capacity} · 射速 ${pr.fireRate}/秒 · 最高 L${pr.climbMax}${pr.fitsTrench ? ' · 可鑽 TRENCH' : ''}`;
   $('opt-team').disabled = !!pr.team;
   if (pr.team) $('opt-team').value = pr.team; else $('opt-team').value = settings.team;
+  for (const el of document.querySelectorAll('.auto-opt')) el.hidden = settings.mode === 'practice';
   for (const el of document.querySelectorAll('.bot-opt, .event-opt')) {
     el.hidden = !(el.classList.contains('bot-opt') && settings.mode === 'match' || el.classList.contains('event-opt') && settings.mode === 'event');
   }
-  $('btn-start').textContent = settings.mode === 'event' && runner.ev ? '繼續賽事' : '開始';
+  $('btn-start').textContent = settings.mode === 'event' && runner.ev ? '繼續賽事' : settings.mode === 'career' ? (careerUI.c ? '繼續生涯' : '開始生涯') : '開始';
   document.body.classList.toggle('touch', touchMode());
 }
 
 function startGame() {
   $('menu').hidden = true;
+  if (settings.mode === 'career') { paused = true; careerUI.show(); return; }
   if (settings.mode === 'event') {
+    eventUI.use(runner, null);
     if (!runner.ev) {
       const pr = ROBOT_PRESETS[settings.preset];
       const ev = newEvent(+settings.evSize, settings.evLevel, { preset: settings.preset, number: pr.team ?? settings.team });
@@ -430,7 +448,7 @@ function startGame() {
 const runner = new EventRunner(() => eventUI.refresh());
 const eventUI = new EventUI(runner, {
   play(id) {
-    const { settings: cfg } = matchSettings(runner.ev, id, settings);
+    const { settings: cfg } = matchSettings(eventUI.runner.ev, id, { ...settings, autoRoutine: routine() });
     cfg.eventMatch = id;
     if (touchMode() && document.fullscreenEnabled && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
     camMode = settings.camera;
@@ -439,6 +457,40 @@ const eventUI = new EventUI(runner, {
   },
   menu() { $('menu').hidden = false; paused = true; describe(); },
 });
+runner.base = () => ({ autoRoutine: routine() });
+
+// ---------- Career ----------
+// After each of our career matches (played or simulated): wear and breakdowns.
+const careerRunner = new EventRunner(() => {
+  const c = careerUI.c, ev = careerRunner.ev;
+  if (c && ev) {
+    const ids = newMatches(c, ev);
+    for (const id of ids) afterMatch(c, id);
+    if (ids.length) careerUI.persist();
+  }
+  eventUI.refresh();
+}, EV_KEY);
+careerRunner.base = runner.base;
+const careerUI = new CareerUI({
+  runner: careerRunner,
+  eventUI,
+  get builder() { return builder; },
+  menu() { $('menu').hidden = false; paused = true; describe(); },
+  testDrive(c) {
+    const cfg = { ...settings, mode: 'practice', preset: 'custom-career', team: c.team.number, customs: [playerBuild(c)], autoRoutine: null, careerTest: true };
+    camMode = settings.camera;
+    newWorld(cfg);
+    input.clearEdges();
+  },
+});
+const autoEditor = new AutoEditor({
+  robot: () => settings.preset,
+  team: () => (ROBOT_PRESETS[settings.preset]?.team ?? settings.team),
+  customs: loadBuilds,
+  onUse(id) { settings.auto = id; saveSettings(); fillMenu(); $('menu').hidden = false; },
+  onClose() { fillMenu(); $('menu').hidden = false; },
+});
+$('btn-autoedit').onclick = () => { $('menu').hidden = true; autoEditor.show(settings.auto); };
 const builder = new Builder({
   team: () => (ROBOT_PRESETS[settings.preset]?.team ?? settings.team),
   onUse(key) { settings.preset = key; saveSettings(); fillMenu(); $('menu').hidden = false; },
@@ -450,7 +502,10 @@ const toEvent = () => { $('results').hidden = true; $('pause').hidden = true; pa
 $('btn-start').onclick = startGame;
 $('btn-resume').onclick = () => { paused = false; $('pause').hidden = true; };
 $('btn-restart').onclick = () => newWorld(world.cfg);
-$('btn-menu').onclick = () => { if (world.cfg.eventMatch) { toEvent(); return; } $('pause').hidden = true; $('menu').hidden = false; paused = true; };
+$('btn-menu').onclick = () => {
+  if (world.cfg.eventMatch) { toEvent(); return; }
+  if (world.cfg.careerTest) { $('pause').hidden = true; paused = true; careerUI.show(); return; }
+  $('pause').hidden = true; $('menu').hidden = false; paused = true; };
 $('btn-again').onclick = () => newWorld(world.cfg);
 $('btn-results-event').onclick = toEvent;
 $('btn-results-menu').onclick = () => { $('results').hidden = true; $('menu').hidden = false; paused = true; };
@@ -469,7 +524,8 @@ function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
 
-  if (world && $('menu').hidden && $('event').hidden && $('builder').hidden) {
+  const overlay = !$('menu').hidden || !$('event').hidden || !$('builder').hidden || !$('autoedit').hidden || !$('career').hidden;
+  if (world && !overlay) {
     if (input.pressed('Escape') || input.pressed('KeyP')) {
       if ($('results').hidden) { paused = !paused; $('pause').hidden = !paused; }
     }
@@ -507,7 +563,7 @@ function frame(now) {
     input.clearEdges();
   }
 
-  document.body.classList.toggle('in-menu', !$('menu').hidden || !$('event').hidden || !$('builder').hidden);
+  document.body.classList.toggle('in-menu', overlay);
   fps.n++; fps.t += dt;
   if (fps.t > 0.5) { $('fps').textContent = `${Math.round(fps.n / fps.t)} fps`; fps.n = 0; fps.t = 0; }
   renderer.render(scene, camera);
@@ -521,6 +577,10 @@ window.sim = {
   input,
   runner,
   get builder() { return builder; },
+  autoEditor,
+  careerUI,
+  careerRunner,
+  venue,
   step(n = 1, cmd) { if (cmd) frameInput = { fx: 0, fy: 0, rot: 0, aim: null, shoot: false, intake: false, ...cmd }; for (let i = 0; i < n; i++) step(STEP); handleEvents(); },
   cam(m) { camMode = m; camState.init = false; },
   view(p, l) { camMode = 'debug'; camState.dbgPos = new THREE.Vector3(...p); camState.dbgLook = new THREE.Vector3(...l); camState.init = false; },

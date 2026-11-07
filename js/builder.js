@@ -20,6 +20,7 @@ export class Builder {
     this.alliance = 'blue';
     this.renderer = null;
     this.model = null;
+    this.career = null;   // career mode CAD: { cb(build | null), team }
     $('builder').addEventListener('click', (e) => this.click(e));
     $('builder').addEventListener('change', (e) => this.change(e));
     $('builder').addEventListener('input', (e) => {
@@ -31,9 +32,20 @@ export class Builder {
   get open() { return !$('builder').hidden; }
 
   show(key) {
+    this.career = null;
     const list = loadBuilds();
     const cur = list.find((b) => presetKey(b) === key) || list[0];
     this.build = cur ? structuredClone(cur) : defaultBuild();
+    $('builder').hidden = false;
+    this.render();
+    this.initView();
+  }
+
+  // Career mode: edit the season robot (advanced mode only); cb gets the saved build, or null.
+  showCareer(build, team, cb) {
+    this.career = { cb, team };
+    this.build = structuredClone(build);
+    this.build.adv ??= defaultAdvanced();
     $('builder').hidden = false;
     this.render();
     this.initView();
@@ -44,12 +56,14 @@ export class Builder {
   render() {
     const list = loadBuilds(), b = this.build;
     const saved = list.some((x) => x.id === b.id);
-    const slots = Object.entries(SLOTS).map(([slot, s]) => `<label>${s.label}
+    const slots = b.adv ? '' : Object.entries(SLOTS).map(([slot, s]) => `<label>${s.label}
       <select data-slot="${slot}">${Object.entries(s.options).map(([k, o]) => `<option value="${k}"${b.parts[slot] === k ? ' selected' : ''}>${o.name}（${o.w} lb）</option>`).join('')}</select></label>`).join('');
-    $('b-list').innerHTML = `<select id="b-pick">${list.map((x) => `<option value="${x.id}"${x.id === b.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}${saved ? '' : `<option value="${b.id}" selected>（新的）${esc(b.name)}</option>`}</select>
+    $('builder').querySelector('[data-act=use]').hidden = !!this.career;
+    if (this.career) $('b-list').innerHTML = '<span class="muted">生涯模式 CAD：存檔後改到的子系統要重做</span>';
+    else $('b-list').innerHTML = `<select id="b-pick">${list.map((x) => `<option value="${x.id}"${x.id === b.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}${saved ? '' : `<option value="${b.id}" selected>（新的）${esc(b.name)}</option>`}</select>
       <button data-act="new">新增</button>${saved ? '<button data-act="delete">刪除</button>' : ''}`;
     $('b-form').innerHTML = `
-      <div class="b-mode"><button data-act="mode" data-mode="simple" class="${b.adv ? '' : 'on'}">簡易</button><button data-act="mode" data-mode="adv" class="${b.adv ? 'on' : ''}">進階</button></div>
+      ${this.career ? '' : `<div class="b-mode"><button data-act="mode" data-mode="simple" class="${b.adv ? '' : 'on'}">簡易</button><button data-act="mode" data-mode="adv" class="${b.adv ? 'on' : ''}">進階</button></div>`}
       <div class="grid">
         <label>名稱<input id="b-name" type="text" maxlength="24" value="${esc(b.name)}"></label>
         <label>塗裝<select id="b-color">${Object.entries(PAINT_NAMES).map(([k, n]) => `<option value="${k}"${b.color === k ? ' selected' : ''}>${n}</option>`).join('')}</select></label>
@@ -200,6 +214,12 @@ export class Builder {
     const el = e.target.closest('[data-act]');
     if (!el || el.disabled) return;
     const act = el.dataset.act;
+    if (this.career && (act === 'close' || act === 'save')) {
+      const cb = this.career.cb;
+      this.hide();
+      cb(act === 'save' ? structuredClone({ ...this.build, name: this.build.name.trim() || '我的機器人' }) : null);
+      return;
+    }
     if (act === 'close') { this.hide(); this.onClose(); }
     if (act === 'side') { this.alliance = this.alliance === 'blue' ? 'red' : 'blue'; el.textContent = `${this.alliance === 'blue' ? '藍' : '紅'}聯盟配色`; this.refreshModel(); }
     if (act === 'mode') {
@@ -253,7 +273,7 @@ export class Builder {
     if (!this.scene) return;
     if (this.model) { this.scene.remove(this.model); this.model.traverse((o) => { if (o.isInstancedMesh) return; o.geometry?.dispose(); for (const m of [o.material].flat()) { m?.map?.dispose(); m?.dispose(); } }); }
     const p = compile(this.build);
-    const m = buildRobotModel({ p, alliance: this.alliance, number: this.team(), isPlayer: false });
+    const m = buildRobotModel({ p, alliance: this.alliance, number: this.career?.team ?? this.team(), isPlayer: false });
     m.fill.mesh.count = m.fill.spots;
     if (m.slide) m.slide.position.x = p.intakeDeploy;
     this.model = m.group;

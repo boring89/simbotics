@@ -78,6 +78,7 @@
         <label>模式
           <select id="opt-mode">
             <option value="match">3v3 比賽（電腦隊友/對手）</option>
+            <option value="career">生涯模式（Kickoff → 休士頓）</option>
             <option value="event">賽事（資格賽 → 選聯盟 → 淘汰賽）</option>
             <option value="solo">單人比賽（計時，無其他機器人）</option>
             <option value="practice">自由練習（不計時）</option>
@@ -91,6 +92,9 @@
         </label>
         <label>隊號
           <input id="opt-team" type="number" min="1" max="99999">
+        </label>
+        <label class="auto-opt">AUTO 自動程式
+          <span class="row"><select id="opt-auto"></select><button id="btn-autoedit" type="button">編輯</button></span>
         </label>
         <label class="event-opt">賽事規模
           <select id="opt-ev-size"><option value="24">24 隊（每隊 8 場）</option><option value="32">32 隊（每隊 9 場）</option><option value="40">40 隊（每隊 9 場）</option></select>
@@ -174,6 +178,19 @@
         <div class="b-view"><canvas id="builder-view"></canvas><button data-act="side" class="b-side">藍聯盟配色</button></div>
         <div id="b-form" class="b-form"></div>
       </div>
+      <div class="b-actions"><button class="primary" data-act="use">儲存並使用</button><button data-act="save">儲存</button><button data-act="close">返回</button></div>
+    </div>
+  </div>
+
+  <div id="career" class="overlay" hidden>
+    <div class="panel wide"><div id="career-body"></div></div>
+  </div>
+
+  <div id="autoedit" class="overlay" hidden>
+    <div class="panel wide">
+      <div class="b-head"><h2>自動程式</h2><div id="ae-list" class="b-list"></div></div>
+      <canvas id="ae-canvas"></canvas>
+      <div id="ae-side" class="ae-side"></div>
       <div class="b-actions"><button class="primary" data-act="use">儲存並使用</button><button data-act="save">儲存</button><button data-act="close">返回</button></div>
     </div>
   </div>

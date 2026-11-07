@@ -1,4 +1,4 @@
-import { LEVELS, rankings, candidates, playoffs, ready, lineup, playerPick, playerRespond, teamName, save } from './event.js';
+import { LEVELS, rankings, candidates, playoffs, ready, lineup, playerPick, playerRespond, teamName } from './event.js';
 
 // The event screen: next match, schedule, rankings, alliance selection and the playoff bracket.
 
@@ -13,10 +13,12 @@ export class EventUI {
     this.play = play;
     this.menu = menu;
     this.tab = null;
+    this.ext = null;   // career mode: { back(), backLabel, tabs: [[key, name, render()]], after(tab), act(el) }
     $('event').addEventListener('click', (e) => this.click(e));
   }
 
   get ev() { return this.runner.ev; }
+  use(runner, ext = null) { this.runner = runner; this.ext = ext; this.tab = null; }
   get open() { return !$('event').hidden; }
   show() { $('event').hidden = false; this.runner.pump(); this.render(); }
   hide() { $('event').hidden = true; }
@@ -26,7 +28,8 @@ export class EventUI {
     const el = e.target.closest('[data-act]');
     if (!el) return;
     const ev = this.ev, act = el.dataset.act;
-    if (act === 'menu') { this.hide(); this.menu(); return; }
+    if (act === 'menu') { this.hide(); if (this.ext) this.ext.back(); else this.menu(); return; }
+    if (this.ext?.act?.(el, act)) { this.render(); return; }
     if (act === 'abandon') { if (ev?.phase === 'done' || confirm('放棄這場賽事？進度會刪除。')) { this.runner.abandon(); this.hide(); this.menu(); } return; }
     if (act === 'tab') { this.tab = el.dataset.tab; this.render(); return; }
     if (act === 'play') { this.hide(); this.play(el.dataset.id); return; }
@@ -34,7 +37,7 @@ export class EventUI {
     if (act === 'pick') playerPick(ev, +el.dataset.team);
     if (act === 'accept') playerRespond(ev, true);
     if (act === 'decline') playerRespond(ev, false);
-    save(ev);
+    this.runner.save();
     this.runner.pump();
     this.render();
   }
@@ -44,17 +47,20 @@ export class EventUI {
     if (!ev) { $('event-body').innerHTML = '<p>沒有進行中的賽事。</p><button data-act="menu">主選單</button>'; return; }
     const tab = this.tab || (ev.phase === 'quals' || ev.phase === 'selection' ? 'rank' : 'bracket');
     const qDone = ev.quals.filter((m) => m.result).length;
+    const tabs = [['rank', '排名'], ['sched', '賽程'], ['bracket', '聯盟 / 淘汰賽'], ...(this.ext?.tabs || []).map(([k, n]) => [k, n])];
+    const extTab = this.ext?.tabs?.find(([k]) => k === tab);
     $('event-body').innerHTML = `
       <div class="ev-head">
-        <div><span class="season">${LEVELS[ev.level].name} · ${ev.size} 隊 · 你是 ${ev.me}</span><h2>${PHASE[ev.phase]}</h2></div>
-        <div class="ev-tools"><button data-act="menu">主選單</button><button data-act="abandon">${ev.phase === 'done' ? '結束賽事' : '放棄賽事'}</button></div>
+        <div><span class="season">${esc(ev.title || LEVELS[ev.level].name)} · ${ev.size} 隊 · 你是 ${ev.me}</span><h2>${PHASE[ev.phase]}</h2></div>
+        <div class="ev-tools"><button data-act="menu">${this.ext ? esc(this.ext.backLabel) : '主選單'}</button>${this.ext ? '' : `<button data-act="abandon">${ev.phase === 'done' ? '結束賽事' : '放棄賽事'}</button>`}</div>
       </div>
       <div class="ev-next">${this.next()}</div>
-      <div class="ev-progress">資格賽 ${qDone} / ${ev.quals.length} 場${this.runner.running ? ` · 背景還有 ${this.runner.running} 場在跑` : ''}</div>
+      <div class="ev-progress">${ev.quals.length ? `資格賽 ${qDone} / ${ev.quals.length} 場` : '直接進淘汰賽'}${this.runner.running ? ` · 背景還有 ${this.runner.running} 場在跑` : ''}</div>
       <div class="ev-tabs">
-        ${[['rank', '排名'], ['sched', '賽程'], ['bracket', '聯盟 / 淘汰賽']].map(([k, n]) => `<button data-act="tab" data-tab="${k}" class="${k === tab ? 'on' : ''}">${n}</button>`).join('')}
+        ${tabs.map(([k, n]) => `<button data-act="tab" data-tab="${k}" class="${k === tab ? 'on' : ''}">${n}</button>`).join('')}
       </div>
-      <div class="ev-view">${tab === 'rank' ? this.rankTable() : tab === 'sched' ? this.schedule() : this.bracket()}</div>`;
+      <div class="ev-view">${extTab ? extTab[2]() : tab === 'rank' ? this.rankTable() : tab === 'sched' ? this.schedule() : this.bracket()}</div>`;
+    this.ext?.after?.(tab);
   }
 
   // The card at the top: what the player does next.

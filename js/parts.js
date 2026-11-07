@@ -80,7 +80,17 @@ export const presetKey = (b) => `custom-${b.id}`;
 // Build -> robot preset (same shape as ROBOT_PRESETS entries).
 export function compile(b) {
   const p = b.adv ? advanced(b.adv).preset : simple(b);
+  if (b.mods) applyMods(p, b.mods);
   return { ...p, model: 'custom', custom: true, name: b.name || '我的機器人', accent: PAINT[b.color] ?? PAINT.silver };
+}
+
+// Career mode: broken or worn mechanisms. mods = { field: multiplier }; climbMax is set, not scaled.
+function applyMods(p, mods) {
+  for (const [k, v] of Object.entries(mods)) {
+    if (k === 'climbMax') p.climbMax = Math.min(p.climbMax, v);
+    else if (typeof p[k] === 'number') p[k] = +(p[k] * v).toFixed(3);
+  }
+  p.capacity = Math.max(1, Math.round(p.capacity));
 }
 
 function simple(b) {

@@ -33,10 +33,24 @@ export function newEvent(size, level, me) {
     for (const [k, w] of weights) { if ((u -= w) < 0) { skill = k; break; } }
     teams.push({ number: n, preset: GENERIC[Math.floor(Math.random() * GENERIC.length)], skill });
   }
-  teams.sort((a, b) => a.number - b.number);
-  const quals = schedule(teams.map((t) => t.number), SIZES[size] || 9)
+  return makeEvent({ teams, me: me.number, per: SIZES[size] || 9, level });
+}
+
+// Any roster: teams = [{ number, preset, skill, player? }], per = qualification matches per team.
+// Extra fields (title, names, customs, venue, ...) are kept on the event.
+export function makeEvent({ teams, me, per, level = 'regional', ...extra }) {
+  teams = [...teams].sort((a, b) => a.number - b.number);
+  const quals = schedule(teams.map((t) => t.number), per)
     .map((m, i) => ({ id: `Q${i + 1}`, red: m.red, blue: m.blue, seed: seed(), result: null }));
-  return { v: 1, level, size, me: me.number, teams, quals, phase: 'quals', sel: null, po: null };
+  return { v: 1, level, size: teams.length, me, teams, quals, phase: 'quals', sel: null, po: null, ...extra };
+}
+
+// Straight to the playoffs with alliances already formed (Einstein).
+export function makePlayoffs({ teams, me, alliances, level = 'champs', ...extra }) {
+  return {
+    v: 1, level, size: teams.length, me, teams, quals: [], phase: 'playoffs',
+    sel: { alliances, turn: ORDER.length, declined: [], pending: null }, po: {}, ...extra,
+  };
 }
 
 // Greedy schedule: each match takes the six teams with the fewest matches so far (longest rest first),
@@ -46,7 +60,7 @@ function schedule(nums, per) {
   const pair = new Map(), key = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
   const count = (a, b, w) => pair.get(key(a, b) + w) || 0;
   const out = [];
-  const total = (nums.length * per) / 6;
+  const total = Math.ceil((nums.length * per) / 6);
   for (let m = 0; m < total; m++) {
     const six = shuffle([...nums]).sort((a, b) => played.get(a) - played.get(b) || last.get(a) - last.get(b)).slice(0, 6);
     let best = null, bestCost = Infinity;
@@ -70,7 +84,7 @@ function schedule(nums, per) {
 }
 
 export const team = (ev, n) => ev.teams.find((t) => t.number === n);
-export const teamName = (ev, n) => `${n} ${ROBOT_PRESETS[team(ev, n)?.preset]?.name.replace(/^\d+\s+/, '') ?? ''}`;
+export const teamName = (ev, n) => `${n} ${ev.names?.[n] ?? ROBOT_PRESETS[team(ev, n)?.preset]?.name.replace(/^\d+\s+/, '') ?? ''}`;
 
 // Qualification record and scouting numbers for every team.
 export function records(ev) {
@@ -205,6 +219,19 @@ export function playoffs(ev) {
   return Object.assign(list, { champion });
 }
 
+// Where every alliance finished: 1 = winner, 2 = finalist, 3, 4, 5 (5th-6th), 7 (7th-8th).
+export function finishes(ev) {
+  const po = playoffs(ev), out = new Array(8).fill(null);
+  if (po.champion === null) return out;
+  const loserOf = (id) => po.find((m) => m.id === id)?.loser;
+  out[po.champion] = 1;
+  out[po.find((m) => m.id === 'F1').a === po.champion ? po.find((m) => m.id === 'F1').b : po.find((m) => m.id === 'F1').a] = 2;
+  out[loserOf('M13')] = 3; out[loserOf('M12')] = 4;
+  for (const id of ['M9', 'M10']) out[loserOf(id)] = 5;
+  for (const id of ['M5', 'M6']) out[loserOf(id)] = 7;
+  return out;
+}
+
 export function lineup(ev, id) {
   if (id[0] === 'Q') { const m = ev.quals.find((q) => q.id === id); return { red: m.red, blue: m.blue }; }
   const m = playoffs(ev).find((p) => p.id === id);
@@ -264,26 +291,32 @@ export function matchSettings(ev, id, base) {
       allySkill: brain(ours), oppSkill: brain(lu[opp]),
       allyTactic: (lu[color].includes(ev.me) && base.allyTactic) || 'balanced', oppTactic: 'balanced',
       lineup: { ally: ours.slice(1).map(t), opp: lu[opp].map(t) },
+      venue: ev.venue || (ev.level === 'champs' ? 'champs' : 'regional'), venueTitle: ev.title || LEVELS[ev.level]?.name || '',
       customs: ev.customs || [],
+      // The player's AUTO routine only goes on their own robot.
+      autoRoutine: lu[color].includes(ev.me) ? base.autoRoutine || null : null,
     },
     mine: lu[color].includes(ev.me),
     playerBot: lead.skill,
   };
 }
 
-export function load() {
-  try { const ev = JSON.parse(localStorage.getItem(KEY) || 'null'); return ev?.v === 1 ? ev : null; } catch { return null; }
+export function load(key = KEY) {
+  try { const ev = JSON.parse(localStorage.getItem(key) || 'null'); return ev?.v === 1 ? ev : null; } catch { return null; }
 }
-export function save(ev) {
-  try { if (ev) localStorage.setItem(KEY, JSON.stringify(ev)); else localStorage.removeItem(KEY); } catch { /* storage unavailable */ }
+export function save(ev, key = KEY) {
+  try { if (ev) localStorage.setItem(key, JSON.stringify(ev)); else localStorage.removeItem(key); } catch { /* storage unavailable */ }
 }
 
 // Runs every match the player isn't in on a small worker pool, as soon as it can be played.
 export class EventRunner {
-  constructor(onChange) {
-    this.ev = load();
+  // key: where the event is saved (career mode keeps its own).
+  constructor(onChange, key = KEY) {
+    this.key = key;
+    this.ev = load(key);
     if (this.ev?.customs) registerBuilds(this.ev.customs);
     this.onChange = onChange;
+    this.base = () => ({});   // extra match settings from the game page (the player's AUTO routine)
     this.busy = new Set();
     this.workers = [];
     this.queue = [];
@@ -291,8 +324,9 @@ export class EventRunner {
     this.size = Math.max(1, Math.min(matchMedia('(pointer: coarse)').matches ? 2 : 4, cores - 2));
   }
 
-  start(ev) { this.ev = ev; this.busy.clear(); this.queue = []; save(ev); this.pump(); this.onChange(); }
-  abandon() { this.ev = null; this.busy.clear(); this.queue = []; save(null); this.onChange(); }
+  start(ev) { this.ev = ev; this.busy.clear(); this.queue = []; this.save(); if (ev.customs) registerBuilds(ev.customs); this.pump(); this.onChange(); }
+  abandon() { this.ev = null; this.busy.clear(); this.queue = []; this.save(); this.onChange(); }
+  save() { save(this.ev, this.key); }
 
   // simulate: also hand the player's own match to a bot.
   pump(simulate = null) {
@@ -300,18 +334,18 @@ export class EventRunner {
     if (!ev) return;
     for (const m of ready(ev)) {
       if (this.busy.has(m.id) || (m.mine && m.id !== simulate)) continue;
-      const { settings, playerBot } = matchSettings(ev, m.id, {});
+      const { settings, playerBot } = matchSettings(ev, m.id, this.base());
       this.busy.add(m.id);
       this.queue.push({ id: m.id, seed: matchSeed(ev, m.id), settings, playerBot, ev });
     }
-    save(ev);
+    this.save();
     this.dispatch();
   }
 
   done(id, res, human) {
     this.busy.delete(id);
     if (!this.ev || !record(this.ev, id, res, human)) return;
-    save(this.ev);
+    this.save();
     this.pump();
     this.onChange();
   }

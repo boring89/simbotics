@@ -4,6 +4,7 @@ import { Robot } from './robot.js';
 import { Match } from './match.js';
 import { Bot, TeamBrain, TACTICS } from './ai.js';
 import { registerBuilds } from './parts.js';
+import { AutoRunner, startPose } from './auto.js';
 
 // Match setup and the fixed-rate physics step, shared by the game page and the headless
 // benchmark (which runs whole matches in Web Workers without drawing anything).
@@ -28,7 +29,8 @@ export function createWorld(scene, field, settings, playerBot = null) {
   const player = new Robot(0, me, myPreset.team ?? settings.team, myPreset, true);
   used.add(player.number);
   robots.push(player);
-  if (mode === 'match') {
+  // settings.solo: just the player's robot (AUTO previews).
+  if (mode === 'match' && !settings.solo) {
     // Picked robots first; "random" slots get the real 2026 robots nobody took (shuffled),
     // topped up with generic ones.
     const picks = [...(settings.allyBots || []), ...(settings.oppBots || [])];
@@ -68,15 +70,23 @@ export function createWorld(scene, field, settings, playerBot = null) {
   }
   // The extra pool slots stay inactive: they back preloads and OUTPOST stock.
 
-  // Starting line positions, facing the neutral zone.
+  // Starting line positions, facing the neutral zone. A player AUTO routine sets its own start;
+  // teammates then take the two spots furthest from it.
   const starts = [-1.65, 1.65, -3.37];
+  const routine = mode !== 'practice' && settings.autoRoutine;
   for (const a of ['red', 'blue']) {
     const s = side(a);
-    robots.filter((r) => r.alliance === a).forEach((r, k) => {
-      r.place(s * (ZONE_X + 0.5), s * starts[k], s > 0 ? Math.PI : 0);
-      r.fuel = STAGE.preload;
-      scene.add(r.mesh);
-    });
+    let spots = starts.map((z) => s * z);
+    const mine = robots.filter((r) => r.alliance === a);
+    if (routine && a === me) {
+      const [x, z, h] = startPose(a, routine.start);
+      player.place(x, z, h);
+      player.autoRunner = new AutoRunner(routine, player);
+      spots = spots.sort((p, q) => Math.abs(q - z) - Math.abs(p - z));
+      mine.splice(mine.indexOf(player), 1);
+    }
+    mine.forEach((r, k) => r.place(s * (ZONE_X + 0.5), spots[k], s > 0 ? Math.PI : 0));
+    for (const r of robots) if (r.alliance === a) { r.fuel = STAGE.preload; scene.add(r.mesh); }
   }
 
   const world = { match, robots, fuel, field, towers: field.towers, bots: [], player, playerBot: null, lastSeg: null, brains: {}, log: null };
@@ -143,9 +153,11 @@ export function stepWorld(world, dt, pcmd) {
   match.update(dt, robots);
 
   const enabled = match.enabled;
-  if (!world.playerBot) world.player.update(dt, pcmd, world, enabled);
+  // Robots with an AUTO routine run it instead of their driver (or bot) until teleop.
+  const auto = (r) => (r.autoRunner && match.phase === 'auto' ? r.autoRunner.cmd(world, dt) : null);
+  if (!world.playerBot) world.player.update(dt, auto(world.player) || pcmd || {}, world, enabled);
   for (const a in world.brains) world.brains[a].update(dt);
-  for (const b of world.bots) b.r.update(dt, b.update(dt), world, enabled);
+  for (const b of world.bots) b.r.update(dt, auto(b.r) || b.update(dt), world, enabled);
 
   for (let pass = 0; pass < 2; pass++) {
     for (let i = 0; i < robots.length; i++) for (let j = i + 1; j < robots.length; j++) Robot.collidePair(robots[i], robots[j]);
