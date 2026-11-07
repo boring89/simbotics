@@ -76,3 +76,86 @@ export function teamRobot(n) {
   const build = { id: `t${n}`, name: (t.name || `Team ${n}`).slice(0, 40), color: colors[Math.floor(r() * colors.length)], adv: a };
   return { preset: `custom-t${n}`, skill, build };
 }
+
+// ---------- Real events for event mode and career ----------
+
+export const VENUE = { regional: 'regional', district: 'district', district_cmp: 'dcmp', champs_div: 'champs', einstein: 'einstein' };
+export const perTeam = (n) => (n <= 40 ? 10 : n <= 60 ? 9 : 8);
+export const shortName = (name) => name.replace(/\s+presented by .*$/i, '');
+
+// A real roster with us in it: our own spot if the team was there, else we take one team's spot
+// (picked from the event key, so the same event always swaps the same team).
+export function rosterWith(roster, me, key) {
+  if (roster.includes(me)) return [...roster];
+  let h = 0;
+  for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const out = [...roster];
+  out[h % out.length] = me;
+  return out;
+}
+
+// Mean EPA of an event's top 16 teams.
+const STRENGTH = new Map();
+function strength(e) {
+  if (STRENGTH.has(e.key)) return STRENGTH.get(e.key);
+  const epa = e.teams.map((n) => DATA.teams[n]?.[1] ?? 0).sort((a, b) => b - a).slice(0, 16);
+  const v = epa.reduce((s, x) => s + x, 0) / Math.max(1, epa.length);
+  STRENGTH.set(e.key, v);
+  return v;
+}
+
+// How hard an event is, against all district events and regionals: bottom 30 % easy, top 25 % hard.
+export const DIFFICULTY = ['簡單', '普通', '困難', '頂尖'];
+let CUTS = null;
+export function difficulty(e) {
+  if (e.type === 'champs_div' || e.type === 'einstein') return 3;
+  if (!CUTS) {
+    const all = DATA.events.filter((x) => x.type === 'district' || x.type === 'regional').map(strength).sort((a, b) => a - b);
+    CUTS = [all[Math.floor(all.length * 0.3)], all[Math.floor(all.length * 0.75)]];
+  }
+  const v = strength(e);
+  return v < CUTS[0] ? 0 : v < CUTS[1] ? 1 : 2;
+}
+
+const WEST = new Set(['AZ', 'CO', 'NV', 'UT', 'ID', 'HI', 'NM', 'MT', 'WY', 'AK']);
+const CENTRAL = new Set(['AR', 'IA', 'IL', 'KS', 'LA', 'MN', 'MO', 'MS', 'ND', 'SD', 'NE', 'OK']);
+const AREAS = [
+  ['us-west', '美國西部', (e) => e.country === 'USA' && WEST.has(e.state)],
+  ['us-central', '美國中部', (e) => e.country === 'USA' && CENTRAL.has(e.state)],
+  ['us-east', '美國東部', (e) => e.country === 'USA' && !WEST.has(e.state) && !CENTRAL.has(e.state)],
+  ['canada', '加拿大', (e) => e.country === 'Canada'],
+  ['latam', '拉丁美洲', (e) => e.country === 'Brazil' || e.country === 'Mexico'],
+  ['turkey', '土耳其', (e) => e.country === 'Türkiye'],
+  ['apac', '亞太', (e) => e.country !== 'USA' && e.country !== 'Canada' && e.country !== 'Brazil' && e.country !== 'Mexico' && e.country !== 'Türkiye'],
+];
+const FEATURED = 4, EASY = 2;   // strongest and easiest events offered per region
+
+// Event-mode regions, each with a few featured events: the district championship and the strongest
+// district events, the strongest regionals of an area, plus the two easiest events of each region,
+// and the eight Houston divisions.
+// Returns [{ key, name, group, events }] with events sorted by week.
+let REGIONS = null;
+export function regions() {
+  if (REGIONS) return REGIONS;
+  const big = DATA.events.filter((e) => e.teams.length >= 24);
+  const top = (list, n) => [...list].sort((a, b) => strength(b) - strength(a)).slice(0, n);
+  const easy = (list, n, skip) => list.filter((e) => !skip.includes(e)).sort((a, b) => strength(a) - strength(b)).slice(0, n);
+  const byWeek = (list) => list.sort((a, b) => a.week - b.week || a.name.localeCompare(b.name));
+  const out = [];
+  for (const [d, name] of Object.entries(DISTRICTS)) {
+    const cmp = top(big.filter((e) => e.type === 'district_cmp' && e.district === d), 2);
+    const all = big.filter((e) => e.type === 'district' && e.district === d);
+    const rest = top(all, FEATURED - cmp.length);
+    rest.push(...easy(all, EASY, rest));
+    if (cmp.length + rest.length) out.push({ key: d, name, group: '分區（District）', events: byWeek([...rest, ...cmp]) });
+  }
+  for (const [key, name, test] of AREAS) {
+    const all = big.filter((e) => e.type === 'regional' && test(e));
+    const ev = top(all, FEATURED);
+    ev.push(...easy(all, EASY, ev));
+    if (ev.length) out.push({ key, name, group: '區域賽（Regional）', events: byWeek(ev) });
+  }
+  const champs = big.filter((e) => e.type === 'champs_div').sort((a, b) => a.name.localeCompare(b.name));
+  if (champs.length) out.push({ key: 'champs', name: '休士頓冠軍賽分組', group: '世界冠軍賽', events: champs });
+  return (REGIONS = out);
+}

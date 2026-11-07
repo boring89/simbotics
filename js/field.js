@@ -24,7 +24,8 @@ function strip(x, z, w, d, color, parent, y = 0.003) {
 }
 
 // Builds every static field element and returns collision data used by the physics.
-export function buildField(scene) {
+// opts.stands: false leaves out the simple stands (the career venue builds its own).
+export function buildField(scene, opts = {}) {
   const root = new THREE.Group();
   scene.add(root);
 
@@ -232,7 +233,7 @@ export function buildField(scene) {
 
   // Stands and backdrop so the field doesn't float in a void.
   const standMat = std(0x2a2e36);
-  for (const sz of [-1, 1]) {
+  for (const sz of opts.stands === false ? [] : [-1, 1]) {
     for (let i = 0; i < 6; i++) {
       box(FIELD_L + 4, 0.35, 0.8, standMat, 0, 0.6 + i * 0.4, sz * (HW + 2.0 + i * 0.8), root);
     }

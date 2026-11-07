@@ -3,14 +3,13 @@ import { HL, ROBOT_PRESETS, BOT_SKILL, COLORS, side, other } from './config.js';
 import { buildField, inZone } from './field.js';
 import { TACTICS, ROLE_LABEL } from './ai.js';
 import { createWorld, stepWorld, summarize } from './sim.js';
-import { EventRunner, newEvent, matchSettings } from './event.js';
+import { EventRunner, newEvent, newRealEvent, matchSettings } from './event.js';
+import { loadSeason, regions, eventByKey, shortName, difficulty, DIFFICULTY } from './season.js';
 import { EventUI } from './eventui.js';
 import { Builder } from './builder.js';
 import { loadBuilds, registerBuilds, presetKey } from './parts.js';
 import { AutoEditor } from './autoedit.js';
 import { buildVenue } from './venue.js';
-import { CareerUI } from './careerui.js';
-import { EV_KEY, playerBuild, newMatches, afterMatch } from './career.js';
 import { loadAutos, packRoutine } from './auto.js';
 import { Input } from './input.js';
 import { MatchLog, robotName } from './log.js';
@@ -20,7 +19,7 @@ const STEP = 1 / 120;
 
 // ---------- Settings ----------
 const isTouchDevice = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0 && !matchMedia('(pointer: fine)').matches;
-const DEFAULTS = { mode: 'match', alliance: 'blue', preset: 'balanced', allySkill: 'hard', oppSkill: 'einstein', allyTactic: 'balanced', oppTactic: 'random', camera: 'driver', control: 'auto', allyBots: ['random', 'random'], oppBots: ['random', 'random', 'random'], autoIntake: true, autoShoot: isTouchDevice, logMode: false, evSize: '32', evLevel: 'regional', auto: '', team: 9999, shadows: !isTouchDevice, showRoles: true };
+const DEFAULTS = { mode: 'match', alliance: 'blue', preset: 'balanced', allySkill: 'hard', oppSkill: 'einstein', allyTactic: 'balanced', oppTactic: 'random', camera: 'driver', control: 'auto', allyBots: ['random', 'random'], oppBots: ['random', 'random', 'random'], autoIntake: true, autoShoot: isTouchDevice, logMode: false, evSize: '32', evLevel: 'regional', evRegion: '', evKey: '', auto: '', team: 9999, shadows: !isTouchDevice, showRoles: true };
 let settings = { ...DEFAULTS };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('simbotics.settings') || '{}')); } catch { /* storage unavailable */ }
 const saveSettings = () => { try { localStorage.setItem('simbotics.settings', JSON.stringify(settings)); } catch { /* ignore */ } };
@@ -417,20 +416,49 @@ function describe() {
   for (const el of document.querySelectorAll('.bot-opt, .event-opt')) {
     el.hidden = !(el.classList.contains('bot-opt') && settings.mode === 'match' || el.classList.contains('event-opt') && settings.mode === 'event');
   }
-  $('btn-start').textContent = settings.mode === 'event' && runner.ev ? '繼續賽事' : settings.mode === 'career' ? (careerUI.c ? '繼續生涯' : '開始生涯') : '開始';
+  const real = !!realEvent();
+  for (const el of document.querySelectorAll('.ev-fake')) el.hidden ||= real;
+  for (const el of document.querySelectorAll('.ev-real')) el.hidden ||= !settings.evRegion;
+  if (settings.mode === 'event' && !regionsReady) fillRegions();
+  $('btn-start').textContent = settings.mode === 'event' && runner.ev ? '繼續賽事' : '開始';
   document.body.classList.toggle('touch', touchMode());
+}
+
+// Event mode: real 2026 events, a few per region, once the season data has loaded.
+let regionsReady = false, regionsLoading = null;
+const realEvent = () => (regionsReady && settings.evRegion && settings.evKey ? eventByKey(settings.evKey) : null);
+function fillRegions() {
+  regionsLoading ??= loadSeason().then(() => {
+    const list = regions(), groups = {};
+    for (const r of list) (groups[r.group] ??= []).push(r);
+    $('opt-ev-region').innerHTML = '<option value="">虛構賽事（隨機隊伍）</option>' + Object.entries(groups)
+      .map(([g, rs]) => `<optgroup label="${g}">${rs.map((r) => `<option value="${r.key}">${r.name}</option>`).join('')}</optgroup>`).join('');
+    const pickRegion = () => {
+      const r = list.find((x) => x.key === settings.evRegion);
+      if (!r) { settings.evRegion = ''; settings.evKey = ''; }
+      $('opt-ev-region').value = settings.evRegion;
+      $('opt-ev-key').innerHTML = (r?.events || []).map((e) => `<option value="${e.key}">${e.type === 'champs_div' ? '冠軍賽' : `第 ${e.week} 週`} · ${shortName(e.name)}（${e.teams.length} 隊 · ${DIFFICULTY[difficulty(e)]}）</option>`).join('');
+      if (r && !r.events.some((e) => e.key === settings.evKey)) settings.evKey = r.events[0].key;
+      $('opt-ev-key').value = settings.evKey;
+    };
+    $('opt-ev-region').onchange = () => { settings.evRegion = $('opt-ev-region').value; pickRegion(); saveSettings(); describe(); };
+    $('opt-ev-key').onchange = () => { settings.evKey = $('opt-ev-key').value; saveSettings(); };
+    regionsReady = true;
+    pickRegion();
+    describe();
+  }).catch(() => { regionsLoading = null; });
 }
 
 function startGame() {
   $('menu').hidden = true;
-  if (settings.mode === 'career') { paused = true; careerUI.show(); return; }
   if (settings.mode === 'event') {
     eventUI.use(runner, null);
     if (!runner.ev) {
       const pr = ROBOT_PRESETS[settings.preset];
-      const ev = newEvent(+settings.evSize, settings.evLevel, { preset: settings.preset, number: pr.team ?? settings.team });
+      const me = { preset: settings.preset, number: pr.team ?? settings.team }, e = realEvent();
+      const ev = e ? newRealEvent(e, me) : newEvent(+settings.evSize, settings.evLevel, me);
       // Keep a copy of a builder robot so later edits don't change a running event.
-      ev.customs = loadBuilds().filter((b) => presetKey(b) === settings.preset);
+      ev.customs = [...loadBuilds().filter((b) => presetKey(b) === settings.preset), ...ev.customs || []];
       runner.start(ev);
     }
     paused = true;
@@ -459,30 +487,6 @@ const eventUI = new EventUI(runner, {
 });
 runner.base = () => ({ autoRoutine: routine() });
 
-// ---------- Career ----------
-// After each of our career matches (played or simulated): wear and breakdowns.
-const careerRunner = new EventRunner(() => {
-  const c = careerUI.c, ev = careerRunner.ev;
-  if (c && ev) {
-    const ids = newMatches(c, ev);
-    for (const id of ids) afterMatch(c, id);
-    if (ids.length) careerUI.persist();
-  }
-  eventUI.refresh();
-}, EV_KEY);
-careerRunner.base = runner.base;
-const careerUI = new CareerUI({
-  runner: careerRunner,
-  eventUI,
-  get builder() { return builder; },
-  menu() { $('menu').hidden = false; paused = true; describe(); },
-  testDrive(c) {
-    const cfg = { ...settings, mode: 'practice', preset: 'custom-career', team: c.team.number, customs: [playerBuild(c)], autoRoutine: null, careerTest: true };
-    camMode = settings.camera;
-    newWorld(cfg);
-    input.clearEdges();
-  },
-});
 const autoEditor = new AutoEditor({
   robot: () => settings.preset,
   team: () => (ROBOT_PRESETS[settings.preset]?.team ?? settings.team),
@@ -504,7 +508,6 @@ $('btn-resume').onclick = () => { paused = false; $('pause').hidden = true; };
 $('btn-restart').onclick = () => newWorld(world.cfg);
 $('btn-menu').onclick = () => {
   if (world.cfg.eventMatch) { toEvent(); return; }
-  if (world.cfg.careerTest) { $('pause').hidden = true; paused = true; careerUI.show(); return; }
   $('pause').hidden = true; $('menu').hidden = false; paused = true; };
 $('btn-again').onclick = () => newWorld(world.cfg);
 $('btn-results-event').onclick = toEvent;
@@ -513,6 +516,10 @@ $('btn-help').onclick = () => { $('help').hidden = !$('help').hidden; };
 $('t-full').hidden = !document.fullscreenEnabled;
 $('t-full').onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {}); };
 fillMenu();
+// Landing page first, unless linked straight to the simulator.
+if (location.hash === '#sim') $('landing').hidden = true;
+$('land-sim').onclick = () => { $('landing').hidden = true; };
+$('btn-home').onclick = () => { $('landing').hidden = false; };
 
 // ---------- Loop ----------
 let last = performance.now();
@@ -524,7 +531,7 @@ function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
 
-  const overlay = !$('menu').hidden || !$('event').hidden || !$('builder').hidden || !$('autoedit').hidden || !$('career').hidden;
+  const overlay = !$('menu').hidden || !$('event').hidden || !$('builder').hidden || !$('autoedit').hidden || !$('landing').hidden;
   if (world && !overlay) {
     if (input.pressed('Escape') || input.pressed('KeyP')) {
       if ($('results').hidden) { paused = !paused; $('pause').hidden = !paused; }
@@ -578,8 +585,6 @@ window.sim = {
   runner,
   get builder() { return builder; },
   autoEditor,
-  careerUI,
-  careerRunner,
   venue,
   step(n = 1, cmd) { if (cmd) frameInput = { fx: 0, fy: 0, rot: 0, aim: null, shoot: false, intake: false, ...cmd }; for (let i = 0; i < n; i++) step(STEP); handleEvents(); },
   cam(m) { camMode = m; camState.init = false; },

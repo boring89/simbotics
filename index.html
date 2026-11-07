@@ -70,6 +70,17 @@
     <p>手機：左半邊螢幕拖曳 = 移動，右半邊拖曳 = 車頭朝向。自動吸球、自動射擊（在己方區域且 HUB 啟用時）。「射擊」按鈕可在區域外手動傳球。</p>
   </div>
 
+  <!-- Landing: pick the match simulator or the career game -->
+  <div id="landing" class="overlay">
+    <div class="landing">
+      <div class="brand"><span class="season">2026 賽季</span><h1>REBUILT</h1><span class="sub">Simbotics</span></div>
+      <div class="land-cards">
+        <button id="land-sim" class="land-card"><b>比賽模擬器</b><span>3v3 比賽、賽事、機器人工廠、AUTO 編輯器</span></button>
+        <a href="career.html" class="land-card career"><b>生涯模式</b><span>一整個賽季：第一人稱工作室裡設計、加工、組裝機器人，再安排交通、打包出發，在 3D 賽場打真實賽事一路到 Einstein（電腦版）</span></a>
+      </div>
+    </div>
+  </div>
+
   <!-- Main menu -->
   <div id="menu" class="overlay">
     <div class="panel">
@@ -78,7 +89,6 @@
         <label>模式
           <select id="opt-mode">
             <option value="match">3v3 比賽（電腦隊友/對手）</option>
-            <option value="career">生涯模式（Kickoff → 休士頓）</option>
             <option value="event">賽事（資格賽 → 選聯盟 → 淘汰賽）</option>
             <option value="solo">單人比賽（計時，無其他機器人）</option>
             <option value="practice">自由練習（不計時）</option>
@@ -96,10 +106,16 @@
         <label class="auto-opt">AUTO 自動程式
           <span class="row"><select id="opt-auto"></select><button id="btn-autoedit" type="button">編輯</button></span>
         </label>
-        <label class="event-opt">賽事規模
+        <label class="event-opt">賽區
+          <select id="opt-ev-region"><option value="">虛構賽事（隨機隊伍）</option></select>
+        </label>
+        <label class="event-opt ev-real">賽事
+          <select id="opt-ev-key"></select>
+        </label>
+        <label class="event-opt ev-fake">賽事規模
           <select id="opt-ev-size"><option value="24">24 隊（每隊 8 場）</option><option value="32">32 隊（每隊 9 場）</option><option value="40">40 隊（每隊 9 場）</option></select>
         </label>
-        <label class="event-opt">賽事等級
+        <label class="event-opt ev-fake">賽事等級
           <select id="opt-ev-level"><option value="regional">區域賽（強弱混合）</option><option value="champs">冠軍賽（強隊多）</option></select>
         </label>
         <label class="bot-opt">隊友 AI
@@ -135,7 +151,7 @@
         <label class="bot-opt"><input id="opt-roles" type="checkbox"> 顯示電腦角色</label>
         <label title="結束時在結算畫面輸出整場的操作記錄"><input id="opt-log" type="checkbox"> 記錄模式</label>
       </div>
-      <button id="btn-start" class="primary">開始</button>
+      <button id="btn-start" class="primary">開始</button><button id="btn-home">回首頁</button>
       <details class="rules">
         <summary>本模擬器的規則</summary>
         <ul>
@@ -180,10 +196,6 @@
       </div>
       <div class="b-actions"><button class="primary" data-act="use">儲存並使用</button><button data-act="save">儲存</button><button data-act="close">返回</button></div>
     </div>
-  </div>
-
-  <div id="career" class="overlay" hidden>
-    <div class="panel wide"><div id="career-body"></div></div>
   </div>
 
   <div id="autoedit" class="overlay" hidden>

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0e1116">
+  <title>Simbotics 生涯模式</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="career.css">
+</head>
+<body class="career">
+  <canvas id="view"></canvas>
+
+  <div id="title" class="screen"></div>
+
+  <div id="hud" hidden>
+    <div class="h-clock"><b id="h-date"></b><span id="h-speed"></span><span id="h-money"></span></div>
+    <div id="h-sub"></div>
+    <div id="h-tasks" hidden></div>
+    <div id="cross"></div>
+    <div id="prompt" hidden></div>
+  </div>
+  <div id="toasts"></div>
+
+  <div id="op" hidden></div>
+  <div id="pc" hidden></div>
+  <div id="panel" hidden></div>
+  <div id="kickoff" hidden></div>
+  <div id="practice-hud" hidden></div>
+  <div id="live-hud" hidden></div>
+
+  <!-- CAD: the robot builder in career mode -->
+  <div id="builder" class="overlay" hidden>
+    <div class="panel wide">
+      <div class="b-head"><h2>CAD</h2><div id="b-list" class="b-list"></div></div>
+      <div class="b-main">
+        <div class="b-view"><canvas id="builder-view"></canvas><button data-act="side" class="b-side">藍聯盟配色</button></div>
+        <div id="b-form" class="b-form"></div>
+      </div>
+      <div class="b-actions"><button class="primary" data-act="use" hidden>儲存並使用</button><button class="primary" data-act="save">存檔</button><button data-act="close">返回</button></div>
+    </div>
+  </div>
+
+  <script type="module" src="js/career/main.js"></script>
+</body>
+</html>

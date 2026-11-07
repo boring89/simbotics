@@ -1,5 +1,6 @@
 import { ROBOT_PRESETS, SCORE } from './config.js';
 import { registerBuilds } from './parts.js';
+import { teamInfo, teamRobot, VENUE, perTeam, rosterWith, shortName } from './season.js';
 
 // Events: qualification schedule, rankings, alliance selection and the 8-alliance double-elimination
 // playoff. The state is plain JSON kept in localStorage; matches without the player run headless in
@@ -34,6 +35,25 @@ export function newEvent(size, level, me) {
     teams.push({ number: n, preset: GENERIC[Math.floor(Math.random() * GENERIC.length)], skill });
   }
   return makeEvent({ teams, me: me.number, per: SIZES[size] || 9, level });
+}
+
+// A real 2026 event (season data loaded): its real roster, with the player in their own team's spot
+// or in place of one team. Teams without a modelled robot get one built from their EPA.
+export function newRealEvent(e, me) {
+  const roster = rosterWith(e.teams, me.number, e.key);
+  const teams = [], names = {}, customs = [];
+  for (const n of roster) {
+    const info = teamInfo(n);
+    if (info?.name && (n !== me.number || e.teams.includes(n))) names[n] = info.name;
+    if (n === me.number) { teams.push({ number: n, preset: me.preset, skill: null, player: true }); continue; }
+    const r = teamRobot(n);
+    if (r.build) customs.push(r.build);
+    teams.push({ number: n, preset: r.preset, skill: r.skill });
+  }
+  return makeEvent({
+    teams, me: me.number, per: perTeam(roster.length), level: e.type === 'champs_div' ? 'champs' : 'regional',
+    title: shortName(e.name), names, customs, venue: VENUE[e.type], key: e.key,
+  });
 }
 
 // Any roster: teams = [{ number, preset, skill, player? }], per = qualification matches per team.
