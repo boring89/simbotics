@@ -4,7 +4,7 @@ import { loadSeason, teamInfo, percentile, season, eventByKey, shortName, DISTRI
 import { PLACES, distance, eventPlace } from './geo.js';
 import { register, EXTRA_FEE, KIND, myMatches } from './compete.js';
 import { startDay, checkReplies } from './trip.js';
-import { EventFlow } from './eventflow.js';
+import { EventFlow, VENUES } from './eventflow.js';
 import { Venue, TestSite } from './venue3d.js';
 import { defaultAdvanced, registerBuilds } from '../parts.js';
 import {
@@ -45,7 +45,7 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-const camera = new THREE.PerspectiveCamera(70, 1, 0.02, 80);
+const camera = new THREE.PerspectiveCamera(70, 1, 0.03, 320);
 function resize() { renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
 addEventListener('resize', resize);
 resize();
@@ -238,7 +238,7 @@ async function start(game) {
   if (g.ev?.customs) registerBuilds(g.ev.customs);
   const sc = new THREE.Scene();
   sc.background = new THREE.Color(0x1c1f26);
-  if (g.where === 'venue' && g.ev) setPlace(new Venue(sc, g, g.ev), sc);
+  if (g.where === 'venue' && g.ev) setPlace(new (VENUES[g.ev.venue] || Venue)(sc, g, g.ev), sc);
   else if (g.where === 'testsite') setPlace(new TestSite(sc, g, flow.trip()?.site || 'hotel'), sc);
   else {
     g.where = 'shop';
@@ -301,7 +301,7 @@ function hud(force = false) {
   if (!g) return;
   const open = isOpen(g), close = closeTime(g);
   $('h-date').textContent = `${fmtDate(g.t)} ${fmtClock(g.t)}`;
-  $('h-speed').textContent = mode === 'op' || mode === 'practice' || mode === 'live' || flow.live ? '×1' : `×${g.speed}`;
+  $('h-speed').textContent = mode === 'op' || mode === 'practice' || mode === 'live' || flow.live ? '×1' : `×${g.speed}${place?.timeScale ? '（1 秒 = 20 秒）' : ''}`;
   $('h-money').textContent = money(g.money);
   if (g.where === 'shop') {
     const en = g.schedule.find((x) => x.status === 'pending'), e = en && eventByKey(en.key);
@@ -721,6 +721,7 @@ function loop(dt, now) {
   // Game time: one real second is one game minute (times the speed). Matches play out in real time.
   if (!paused && mode !== 'end') {
     let sp = mode === 'shop' && (!panelOpen || computer.open) ? g.speed : 1;
+    if (mode === 'shop' && place.timeScale) sp *= place.timeScale;
     if (flow.fast) sp = 30;
     if (mode === 'live' || flow.live) sp = 1 / 60;
     if (!(panelOpen && !computer.open && mode === 'shop' && !flow.live)) run(dt * sp);

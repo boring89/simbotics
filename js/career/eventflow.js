@@ -9,6 +9,10 @@ import {
   repairPlan, repair, serviceMin, service, initBatteries, chargeBatteries, swapBattery, inspect, observe, scoutView, finishEvent, seasonOver,
 } from './compete.js';
 import { Venue, TestSite } from './venue3d.js';
+import { Houston } from './houston.js';
+
+// Houston's championship and Einstein get the real convention-center layout.
+export const VENUES = { champs: Houston, einstein: Houston };
 import { LiveMatch } from './matchview.js';
 
 // The competition side of the career, driven from the game loop: deadlines at home, the trip,
@@ -150,7 +154,7 @@ export class EventFlow {
     this.runner.reset();
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x1c1f26);
-    this.c.setPlace(new Venue(scene, g, g.ev), scene);
+    this.c.setPlace(new (VENUES[g.ev.venue] || Venue)(scene, g, g.ev), scene);
     const t = this.trip();
     this.c.panel(`<h2>${esc(g.ev.title)}</h2><p>第 1 天：load-in、佈置 pit、安檢。資格賽明天 ${fmtClock(9 * 60)} 開始。</p>
       <ul class="p-log"><li>先到 Pit Admin 申請安檢，檢查員會到 pit 來。沒過安檢不能上資格賽。</li>
@@ -430,8 +434,8 @@ export class EventFlow {
     if (g.robotPos === 'carried' || g.robotPos === 'queue' || g.robotPos === 'gate') g.robotPos = 'pit';
     this.night(this.trip());
     advance(g, (Math.floor(g.t / DAY) + 1) * DAY + OPEN);
-    const p = this.place.player, b = this.place.myBooth;
-    p.x = b.x; p.z = b.z + b.face * 2.2;
+    const p = this.place.player, f = this.place.boothFront;
+    p.x = f.x; p.z = f.z; p.yaw = f.yaw;
     saveGame(g);
     this.c.panel(`<h2>第 ${d} 天結束</h2>${today.length ? `<p>今天的場次：${today.map((m) => `${m.id} ${this.scoreText(m.id)}`).join('、')}</p>` : ''}${rank ? `<p>目前排名第 <b>${rank}</b> / ${ev.size}</p>` : ''}<p class="muted">回飯店休息。${fmtDate(g.t)} ${fmtClock(g.t)} 回到賽場。</p>`, [['開始第 ' + (d + 1) + ' 天', () => {}]]);
   }

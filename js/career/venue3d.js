@@ -205,6 +205,8 @@ export class Venue extends Place {
   }
 
   get entry() { return { x: -30, z: PIT_Z0 }; }
+  // Where to stand in front of our booth, looking in.
+  get boothFront() { const b = this.myBooth; return { x: b.x, z: b.z + b.face * 2.2, yaw: b.face > 0 ? 0 : Math.PI }; }
   inStands(p = this.player) { return p.z < -HW - 0.9 && Math.abs(p.x) < 13; }
   get adminSpot() { return ADMIN; }
   near(p, q, r = 1.6) { return Math.hypot(p.x - q.x, p.z - q.z) < r; }

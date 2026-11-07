@@ -158,6 +158,13 @@ python3 -m http.server 8080
   - 走到觀眾席就會即時轉播正在進行的比賽；其他時間別隊的比賽在背景模擬。
   - Scouting：派隊友 scouting（要帶平板），或自己在觀眾席看，就會累積各隊資料，選聯盟時看得到估計的進球和攀爬。Tab 打開平板：賽程、排名、scouting、隊員分工。
   - 第 3 天中午選聯盟（我們是隊長就自己選，被邀請可以接受或婉拒），接著雙敗淘汰賽。可以從出口回飯店（跳到隔天），或在淘汰賽時快轉到閉幕。
+- **休士頓冠軍賽：** 場館照 FIRST 公開的 2026 喬治布朗會議中心（GRB）一樓平面圖還原：
+  - Hall A（西）是 Archimedes、Daly、Curie、Galileo 的 pit，Hall E（東）是 Hopper、Milstein、Johnson、Newton 的 pit，pit 沿南北向的街道排列，外牆邊有練習場和測試區。
+  - Hall B–D 由西到東排著 8 個分組場地，每個場地南北兩側都有看台，場地之間有簾幕；Hall C 後方是 Robot Service Center，Hall D 有 Ship Desk；pit 區和比賽區交界的隔牆旁是 Pit Admin。
+  - 南側是大廳（FIRST Store、Registration），天花板大約三層樓高。
+  - 週六淘汰賽時，聯盟的機器人移到北側看台後方的聯盟 pit（A1–N8）。
+  - Einstein 那天用 Galileo 和 Johnson 兩個場地（MASS、ENERGY），中間是舞台，隊伍的推車在場地旁待命。
+  - 場館很大，在休士頓時間放慢為 1 秒 = 20 秒，走到場地才不會吃掉整個賽程。各分組的隊伍排在正確的 pit 區塊裡，但每隊的攤位位置是推算的。
 - **賽季：** 地區積分、地區冠軍賽與冠軍賽門檻、區域賽冠軍與積分池、休士頓分組和 Einstein 都照前面賽事模式的規則。比完回家，機器人依運送方式晚幾天（海運一個月）才回到工作室，可以繼續改機器準備下一場。最後一場結束會顯示整季成績。
 
 ### 賽事模式
@@ -260,6 +267,7 @@ python3 -m http.server 8080
 | `js/career/geo.js`、`trip.js` | 各州／國家的位置與距離；交通方式、票價、飯店、測試場地、打包與運送損壞 |
 | `js/career/compete.js` | 賽季報名、賽事的時刻表、背景 worker 模擬、故障與維修、電池、安檢、scouting、積分與晉級 |
 | `js/career/eventflow.js` | 比賽流程：出發、測試日、賽場的每一天、我們的場次、選聯盟、回家 |
+| `js/career/houston.js` | 休士頓冠軍賽場館（照官方 GRB 平面圖）與 Einstein 佈局 |
 | `js/career/venue3d.js`、`matchview.js` | 3D 賽場（場地、觀眾席、排隊區、pit 區）與測試場地；在賽場上即時進行的比賽 |
 | `js/career/main.js` | 生涯模式主迴圈：標題與存檔、建立隊伍、輸入、HUD、互動與面板 |
 | `js/venue.js` | 賽事比賽時場邊的觀眾席與大螢幕 |
